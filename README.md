@@ -70,7 +70,7 @@ typos
 
 <img align="right" src="https://149753425.v2.pressablecdn.com/wp-content/uploads/2009/06/OSIApproved_100X125.png" alt="Open Source Initiative approved license logo">
 
-The class is licensed under the [MIT License](http://opensource.org/licenses/MIT):
+This project is licensed under the [MIT License](LICENSE):
 
 Copyright &copy; 2026 [Chris Ohk](https://github.com/utilForever) and [Hyeok Kwon](https://github.com/namicad).
 
