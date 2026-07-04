@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/utilForever/omniring"
 readme = "README.md"
 keywords = ["pokemon", "simulation", "rl"]
-categories = ["simulation", "reinforcement-learning"]
+categories = ["game-development", "simulation", "artificial-intelligence"]
 
 [lib]
 name = "omniring"
