@@ -1,20 +1,26 @@
-# Omniring
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Rust](https://github.com/utilForever/omniring/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/utilForever/omniring/actions/workflows/rust.yml)
-[![Typos](https://github.com/utilForever/omniring/actions/workflows/typos.yml/badge.svg?branch=main)](https://github.com/utilForever/omniring/actions/workflows/typos.yml)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Lines of Code](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=ncloc)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=coverage)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=bugs)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-[![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=utilForever_omniring)
-
-Omniring is a Rust library for building a reinforcement learning environment for Pokemon Champions.
+<p align="center">
+  <picture>
+    <img src="https://raw.githubusercontent.com/utilForever/omniring/refs/heads/main/assets/logo.png" width="400"/>
+  </picture>
+</p>
+<p align="center">
+  <b>A Rust library for building a reinforcement learning environment for Pokemon Champions</b>
+</p>
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://github.com/utilForever/omniring/actions/workflows/rust.yml"><img src="https://github.com/utilForever/omniring/actions/workflows/rust.yml/badge.svg?branch=main" alt="Rust" /></a>
+  <a href="https://github.com/utilForever/omniring/actions/workflows/typos.yml"><img src="https://github.com/utilForever/omniring/actions/workflows/typos.yml/badge.svg?branch=main" alt="Typos" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=alert_status" alt="Quality Gate Status" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=ncloc" alt="Lines of Code" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=coverage" alt="Coverage" /></a>
+  <br />
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=sqale_rating" alt="Maintainability Rating" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=reliability_rating" alt="Reliability Rating" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=security_rating" alt="Security Rating" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=bugs" alt="Bugs" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=vulnerabilities" alt="Vulnerabilities" /></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=utilForever_omniring"><img src="https://sonarcloud.io/api/project_badges/measure?project=utilForever_omniring&metric=sqale_index" alt="Technical Debt" /></a>
+</p>
 
 ## What This Library Does
 
