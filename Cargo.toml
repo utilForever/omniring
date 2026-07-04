@@ -1,0 +1,14 @@
+[package]
+name = "omniring"
+version = "0.1.0"
+edition = "2024"
+description = "A reinforcement learning environment for Pokemon Champions."
+license = "MIT"
+repository = "https://github.com/utilForever/omniring"
+readme = "README.md"
+keywords = ["pokemon", "simulation", "rl"]
+categories = ["game-development", "simulation", "artificial-intelligence"]
+
+[lib]
+name = "omniring"
+path = "src/lib.rs"
