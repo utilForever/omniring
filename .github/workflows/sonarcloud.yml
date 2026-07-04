@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Skip scan when SONAR_TOKEN is missing
         if: ${{ env.SONAR_TOKEN == '' }}
