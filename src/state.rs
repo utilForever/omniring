@@ -1,3 +1,18 @@
+/// The minimum internal simulator state of a Pokemon Champions Single Battle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BattleState {
+    pub player: TeamState,
+    pub opponent: TeamState,
+    pub terminated: bool,
+}
+
+/// The public six-Pokemon rosters shown before team selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamPreviewObservation {
+    pub player: [PokemonState; 6],
+    pub opponent: [PokemonState; 6],
+}
+
 /// One Trainer's six-Pokemon roster and completed three-Pokemon selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamState {
@@ -90,7 +105,38 @@ impl PokemonState {
 
 #[cfg(test)]
 mod tests {
-    use super::{PokemonState, StateError, TeamState};
+    use super::{BattleState, PokemonState, StateError, TeamPreviewObservation, TeamState};
+
+    #[test]
+    fn represents_a_single_battle() {
+        let preview = TeamPreviewObservation {
+            player: roster(100),
+            opponent: roster(80),
+        };
+        let player = TeamState::new(
+            preview.player.clone(),
+            [true, true, true, false, false, false],
+            Some(0),
+        )
+        .unwrap();
+        let opponent = TeamState::new(
+            preview.opponent.clone(),
+            [false, true, false, true, false, true],
+            Some(1),
+        )
+        .unwrap();
+        let state = BattleState {
+            player,
+            opponent,
+            terminated: false,
+        };
+
+        assert_eq!(preview.player.len(), 6);
+        assert_eq!(preview.opponent.len(), 6);
+        assert_eq!(state.player.roster().len(), 6);
+        assert_eq!(state.opponent.roster()[1].hp_curr(), 80);
+        assert!(!state.terminated);
+    }
 
     #[test]
     fn rejects_invalid_team_state() {
@@ -117,6 +163,7 @@ mod tests {
 
         let mut fainted = roster(100);
         fainted[0] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
         assert_eq!(
             TeamState::new(fainted, [true, true, true, false, false, false], Some(0),),
             Err(StateError::InvalidActiveSlot)
