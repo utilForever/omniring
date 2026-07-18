@@ -13,6 +13,59 @@ pub struct TeamPreviewObservation {
     pub opponent: [PokemonState; 6],
 }
 
+/// A player-facing observation that cannot expose the opponent's selection mask.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BattleObservation {
+    pub player: TeamState,
+    pub opponent: OpponentObservation,
+    pub terminated: bool,
+}
+
+/// Battle state revealed about the opposing roster.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpponentObservation {
+    roster: [PokemonState; 6],
+    selection_revealed: [bool; 6],
+    slot_active: Option<usize>,
+}
+
+impl OpponentObservation {
+    pub fn new(team: &TeamState, selection_revealed: [bool; 6]) -> Result<Self, StateError> {
+        if selection_revealed
+            .iter()
+            .zip(team.selected)
+            .any(|(&revealed, selected)| revealed && !selected)
+        {
+            return Err(StateError::InvalidRevealedSelection);
+        }
+
+        if team
+            .slot_active
+            .is_some_and(|active| !selection_revealed[active])
+        {
+            return Err(StateError::InvalidActiveSlot);
+        }
+
+        Ok(Self {
+            roster: team.roster.clone(),
+            selection_revealed,
+            slot_active: team.slot_active,
+        })
+    }
+
+    pub fn roster(&self) -> &[PokemonState; 6] {
+        &self.roster
+    }
+
+    pub fn selection_revealed(&self) -> &[bool; 6] {
+        &self.selection_revealed
+    }
+
+    pub fn slot_active(&self) -> Option<usize> {
+        self.slot_active
+    }
+}
+
 /// One Trainer's six-Pokemon roster and completed three-Pokemon selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamState {
@@ -65,6 +118,7 @@ impl TeamState {
 pub enum StateError {
     InvalidSelectionCount,
     InvalidActiveSlot,
+    InvalidRevealedSelection,
     InvalidHp,
 }
 
@@ -105,10 +159,13 @@ impl PokemonState {
 
 #[cfg(test)]
 mod tests {
-    use super::{BattleState, PokemonState, StateError, TeamPreviewObservation, TeamState};
+    use super::{
+        BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,
+        TeamPreviewObservation, TeamState,
+    };
 
     #[test]
-    fn represents_a_single_battle() {
+    fn represents_a_single_battle_without_revealing_the_opponent_selection() {
         let preview = TeamPreviewObservation {
             player: roster(100),
             opponent: roster(80),
@@ -125,6 +182,15 @@ mod tests {
             Some(1),
         )
         .unwrap();
+        let observation = BattleObservation {
+            player: player.clone(),
+            opponent: OpponentObservation::new(
+                &opponent,
+                [false, true, false, false, false, false],
+            )
+            .unwrap(),
+            terminated: false,
+        };
         let state = BattleState {
             player,
             opponent,
@@ -135,6 +201,17 @@ mod tests {
         assert_eq!(preview.opponent.len(), 6);
         assert_eq!(state.player.roster().len(), 6);
         assert_eq!(state.opponent.roster()[1].hp_curr(), 80);
+        assert_eq!(observation.opponent.roster().len(), 6);
+        assert_eq!(
+            observation
+                .opponent
+                .selection_revealed()
+                .iter()
+                .filter(|&&slot| slot)
+                .count(),
+            1
+        );
+        assert_eq!(observation.opponent.slot_active(), Some(1));
         assert!(!state.terminated);
     }
 
@@ -179,6 +256,25 @@ mod tests {
         assert_eq!(
             PokemonState::new(0, 0, [true; 4]),
             Err(StateError::InvalidHp)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_opponent_observation() {
+        let team = TeamState::new(
+            roster(100),
+            [true, true, true, false, false, false],
+            Some(0),
+        )
+        .unwrap();
+
+        assert_eq!(
+            OpponentObservation::new(&team, [false; 6]),
+            Err(StateError::InvalidActiveSlot)
+        );
+        assert_eq!(
+            OpponentObservation::new(&team, [true, false, false, true, false, false]),
+            Err(StateError::InvalidRevealedSelection)
         );
     }
 

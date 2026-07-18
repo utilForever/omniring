@@ -1,3 +1,6 @@
 mod state;
 
-pub use state::{BattleState, PokemonState, StateError, TeamPreviewObservation, TeamState};
+pub use state::{
+    BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,
+    TeamPreviewObservation, TeamState,
+};
