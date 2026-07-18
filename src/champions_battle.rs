@@ -1,21 +1,21 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleFormat {
     Singles,
-    Doubles,
+    // Doubles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleMode {
     Ranked,
-    //Casual,
-    //Private,
+    // Casual,
+    // Private,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleMechanic {
     None,
     MegaEvolution,
-    //Terastallization,
+    // Terastallization,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,11 +31,11 @@ pub struct ChampionsRules {
 impl ChampionsRules {
     pub fn ranked_doubles() -> Self {
         Self {
-            format: BattleFormat::Doubles,
+            format: BattleFormat::Singles,
             mode: BattleMode::Ranked,
             level_cap: 50,
             team_size: 6,
-            selected_team_size: 4,
+            selected_team_size: 3,
             mechanic: BattleMechanic::MegaEvolution,
         }
     }
