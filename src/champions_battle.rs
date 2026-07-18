@@ -7,15 +7,15 @@ pub enum BattleFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleMode {
     Ranked,
-    Casual,
-    Private,
+    //Casual,
+    //Private,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleMechanic {
     None,
     MegaEvolution,
-    Terastallization,
+    //Terastallization,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
