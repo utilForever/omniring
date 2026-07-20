@@ -110,3 +110,110 @@ impl TeamPreviewObservation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Action, ActionError};
+    use crate::state::{BattleState, PokemonState, TeamPreviewObservation, TeamState};
+
+    #[test]
+    fn exposes_and_validates_deterministic_actions_without_mutating_state() {
+        let preview = TeamPreviewObservation {
+            player: roster(100),
+            opponent: roster(100),
+        };
+        let selections = preview.legal_player_actions();
+
+        assert_eq!(selections.len(), 120);
+        assert_eq!(selections.first(), Some(&Action::SelectTeam([0, 1, 2])));
+        assert_eq!(selections.last(), Some(&Action::SelectTeam([5, 4, 3])));
+        assert!(
+            selections
+                .iter()
+                .all(|&action| preview.validate_player_action(action).is_ok())
+        );
+        assert_eq!(
+            preview.validate_player_action(Action::SelectTeam([0, 0, 1])),
+            Err(ActionError::InvalidTeamSelection)
+        );
+        assert_eq!(
+            preview.validate_player_action(Action::SelectTeam([0, 1, 6])),
+            Err(ActionError::InvalidTeamSelection)
+        );
+
+        let mut player_roster = roster(100);
+        player_roster[0].move_availability = [true, false, true, false];
+        player_roster[2] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let state = BattleState {
+            player: TeamState::new(
+                player_roster,
+                [true, true, true, false, false, false],
+                Some(0),
+            )
+            .unwrap(),
+            opponent: TeamState::new(
+                roster(100),
+                [true, true, true, false, false, false],
+                Some(0),
+            )
+            .unwrap(),
+            terminated: false,
+        };
+        let unchanged = state.clone();
+        let actions = state.legal_player_actions();
+
+        assert_eq!(
+            actions,
+            vec![Action::Move(0), Action::Move(2), Action::Switch(1)]
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|&action| state.validate_player_action(action).is_ok())
+        );
+        assert_eq!(
+            state.validate_player_action(Action::Move(4)),
+            Err(ActionError::UnavailableMove)
+        );
+        assert_eq!(
+            state.validate_player_action(Action::Move(1)),
+            Err(ActionError::UnavailableMove)
+        );
+        assert_eq!(
+            state.validate_player_action(Action::Switch(0)),
+            Err(ActionError::InvalidSwitch)
+        );
+        assert_eq!(
+            state.validate_player_action(Action::Switch(2)),
+            Err(ActionError::InvalidSwitch)
+        );
+        assert_eq!(state, unchanged);
+
+        let replacement = BattleState {
+            player: TeamState::new(roster(100), [true, true, true, false, false, false], None)
+                .unwrap(),
+            opponent: state.opponent.clone(),
+            terminated: false,
+        };
+        let actions = replacement.legal_player_actions();
+
+        assert_eq!(
+            actions,
+            vec![Action::Switch(0), Action::Switch(1), Action::Switch(2)]
+        );
+        assert!(
+            actions
+                .iter()
+                .all(|&action| replacement.validate_player_action(action).is_ok())
+        );
+        assert_eq!(
+            replacement.validate_player_action(Action::Move(0)),
+            Err(ActionError::UnavailableMove)
+        );
+    }
+
+    fn roster(hp: u32) -> [PokemonState; 6] {
+        std::array::from_fn(|_| PokemonState::new(hp, hp, [true; 4]).unwrap())
+    }
+}
