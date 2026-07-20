@@ -140,6 +140,10 @@ mod tests {
             preview.validate_player_action(Action::SelectTeam([0, 1, 6])),
             Err(ActionError::InvalidTeamSelection)
         );
+        assert_eq!(
+            preview.validate_player_action(Action::Move(0)),
+            Err(ActionError::WrongPhase)
+        );
 
         let mut player_roster = roster(100);
         player_roster[0].move_availability = [true, false, true, false];
@@ -188,7 +192,19 @@ mod tests {
             state.validate_player_action(Action::Switch(2)),
             Err(ActionError::InvalidSwitch)
         );
+        assert_eq!(
+            state.validate_player_action(Action::SelectTeam([0, 1, 2])),
+            Err(ActionError::WrongPhase)
+        );
         assert_eq!(state, unchanged);
+
+        let mut terminated = state.clone();
+        terminated.terminated = true;
+        assert!(terminated.legal_player_actions().is_empty());
+        assert_eq!(
+            terminated.validate_player_action(Action::Move(0)),
+            Err(ActionError::BattleTerminated)
+        );
 
         let replacement = BattleState {
             player: TeamState::new(roster(100), [true, true, true, false, false, false], None)
