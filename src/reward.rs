@@ -64,3 +64,49 @@ fn normalized_hp(team: &TeamState) -> f32 {
         .sum::<f32>()
         / 3.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::calculate_reward;
+    use crate::state::{BattleState, PokemonState, TeamState};
+
+    #[test]
+    fn rewards_hp_faints_and_terminal_outcomes_once() {
+        let initial = state([100; 3], [100; 3], false);
+        let progress = state([90; 3], [80; 3], false);
+
+        assert_close(calculate_reward(&initial, &progress), 0.01);
+
+        let win = state([100; 3], [0; 3], true);
+        let loss = state([0; 3], [100; 3], true);
+        let draw = state([0; 3], [0; 3], true);
+        let stopped = state([100; 3], [100; 3], true);
+
+        assert_close(calculate_reward(&initial, &win), 1.4);
+        assert_close(calculate_reward(&initial, &loss), -1.4);
+        assert_eq!(calculate_reward(&initial, &draw), 0.0);
+        assert_eq!(calculate_reward(&initial, &stopped), 0.0);
+        assert_eq!(calculate_reward(&win, &win), 0.0);
+    }
+
+    fn state(player_hp: [u32; 3], opponent_hp: [u32; 3], terminated: bool) -> BattleState {
+        BattleState {
+            player: team(player_hp),
+            opponent: team(opponent_hp),
+            terminated,
+        }
+    }
+
+    fn team(hp: [u32; 3]) -> TeamState {
+        let roster = std::array::from_fn(|slot| {
+            PokemonState::new(if slot < 3 { hp[slot] } else { 100 }, 100, [true; 4]).unwrap()
+        });
+        let active = hp.iter().position(|&hp| hp > 0);
+
+        TeamState::new(roster, [true, true, true, false, false, false], active).unwrap()
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+}
