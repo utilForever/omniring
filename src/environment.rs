@@ -74,7 +74,7 @@ where
             });
 
             return Ok(StepOutcome {
-                observation: Observation::Battle(observation(state, self.opponent_revealed)),
+                observation: Observation::Battle(observation(state, self.opponent_revealed)?),
                 reward: 0.0,
                 terminated: false,
             });
@@ -92,7 +92,7 @@ where
         }
 
         Ok(StepOutcome {
-            observation: Observation::Battle(observation(state, self.opponent_revealed)),
+            observation: Observation::Battle(observation(state, self.opponent_revealed)?),
             reward: calculate_reward(&previous, state),
             terminated: state.terminated,
         })
@@ -113,13 +113,16 @@ fn selected_team(
         .map_err(|_| ActionError::InvalidTeamSelection)
 }
 
-fn observation(state: &BattleState, opponent_revealed: [bool; 6]) -> BattleObservation {
-    BattleObservation {
+fn observation(
+    state: &BattleState,
+    opponent_revealed: [bool; 6],
+) -> Result<BattleObservation, ActionError> {
+    Ok(BattleObservation {
         player: state.player.clone(),
         opponent: OpponentObservation::new(&state.opponent, opponent_revealed)
-            .expect("the active opponent is always revealed"),
+            .map_err(|_| ActionError::InvalidTeamSelection)?,
         terminated: state.terminated,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -186,6 +189,29 @@ mod tests {
         assert_eq!(
             environment.reset(),
             Observation::TeamPreview(preview.clone())
+        );
+    }
+
+    #[test]
+    fn reports_a_transition_that_breaks_the_reveal_invariant() {
+        let preview = TeamPreviewObservation {
+            player: roster(100),
+            opponent: roster(100),
+        };
+        let mut environment = Environment::new(preview, [0, 1, 2], |state, _| {
+            state.opponent = TeamState::new(
+                roster(100),
+                [false, true, true, true, false, false],
+                Some(1),
+            )
+            .unwrap();
+        })
+        .unwrap();
+
+        environment.step(Action::SelectTeam([0, 1, 2])).unwrap();
+        assert_eq!(
+            environment.step(Action::Move(0)),
+            Err(ActionError::InvalidTeamSelection)
         );
     }
 
