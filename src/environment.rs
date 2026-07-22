@@ -121,3 +121,94 @@ fn observation(state: &BattleState, opponent_revealed: [bool; 6]) -> BattleObser
         terminated: state.terminated,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::{Environment, Observation};
+    use crate::{
+        Action, ActionError, BattleState, PokemonState, TeamPreviewObservation, TeamState,
+    };
+
+    #[test]
+    fn runs_a_hidden_information_episode_from_preview_to_reset() {
+        let preview = TeamPreviewObservation {
+            player: roster(100),
+            opponent: roster(100),
+        };
+
+        assert!(Environment::new(preview.clone(), [0, 0, 1], |_, _| {}).is_err());
+
+        let terminal = state([0; 3], true);
+        let transitions = Cell::new(0);
+        let mut environment = Environment::new(preview.clone(), [0, 1, 2], |state, _| {
+            transitions.set(transitions.get() + 1);
+            *state = terminal.clone();
+        })
+        .unwrap();
+
+        assert_eq!(
+            environment.reset(),
+            Observation::TeamPreview(preview.clone())
+        );
+        assert_eq!(
+            environment.step(Action::Move(0)),
+            Err(ActionError::WrongPhase)
+        );
+
+        let selected = environment.step(Action::SelectTeam([0, 1, 2])).unwrap();
+
+        assert_eq!(selected.reward, 0.0);
+        assert!(!selected.terminated);
+
+        let Observation::Battle(observation) = selected.observation else {
+            panic!("team selection must start the battle");
+        };
+
+        assert_eq!(
+            observation.opponent.selection_revealed(),
+            &[true, false, false, false, false, false]
+        );
+        assert_eq!(transitions.get(), 0);
+
+        let outcome = environment.step(Action::Move(0)).unwrap();
+
+        assert!((outcome.reward - 1.4).abs() < 1e-6);
+        assert!(outcome.terminated);
+        assert!(matches!(outcome.observation, Observation::Battle(_)));
+        assert_eq!(transitions.get(), 1);
+        assert_eq!(
+            environment.step(Action::Move(0)),
+            Err(ActionError::BattleTerminated)
+        );
+        assert_eq!(transitions.get(), 1);
+        assert_eq!(
+            environment.reset(),
+            Observation::TeamPreview(preview.clone())
+        );
+    }
+
+    fn state(opponent_hp: [u32; 3], terminated: bool) -> BattleState {
+        BattleState {
+            player: team([100; 3]),
+            opponent: team(opponent_hp),
+            terminated,
+        }
+    }
+
+    fn team(hp: [u32; 3]) -> TeamState {
+        TeamState::new(
+            std::array::from_fn(|slot| {
+                PokemonState::new(if slot < 3 { hp[slot] } else { 100 }, 100, [true; 4]).unwrap()
+            }),
+            [true, true, true, false, false, false],
+            hp.iter().position(|&hp| hp > 0),
+        )
+        .unwrap()
+    }
+
+    fn roster(hp: u32) -> [PokemonState; 6] {
+        std::array::from_fn(|_| PokemonState::new(hp, hp, [true; 4]).unwrap())
+    }
+}
