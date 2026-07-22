@@ -56,11 +56,10 @@ where
 
     pub fn step(&mut self, action: Action) -> Result<StepOutcome, ActionError> {
         if self.state.is_none() {
-            self.preview.validate_player_action(action)?;
-
             let Action::SelectTeam(selection) = action else {
-                unreachable!();
+                return Err(ActionError::WrongPhase);
             };
+            self.preview.validate_player_action(action)?;
 
             let player = selected_team(self.preview.player.clone(), selection)?;
             let opponent = self.opponent.clone();
@@ -165,14 +164,12 @@ mod tests {
         assert_eq!(selected.reward, 0.0);
         assert!(!selected.terminated);
 
-        let Observation::Battle(observation) = selected.observation else {
-            panic!("team selection must start the battle");
-        };
-
-        assert_eq!(
-            observation.opponent.selection_revealed(),
-            &[true, false, false, false, false, false]
-        );
+        assert!(matches!(
+            selected.observation,
+            Observation::Battle(observation)
+                if observation.opponent.selection_revealed()
+                    == &[true, false, false, false, false, false]
+        ));
         assert_eq!(transitions.get(), 0);
 
         let outcome = environment.step(Action::Move(0)).unwrap();
