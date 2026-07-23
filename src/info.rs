@@ -157,8 +157,14 @@ pub struct PokemonSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleError {
     InvalidMoveIndex { index: usize },
-    FaintedPokemonCannotAttack,
     InvalidStatPoints,
+    InvalidDamageModifier,
+    InvalidDamageRandomRawRoll { raw_roll: u8 },
+    ZeroDefenseStat,
+    InvalidDamageRandomPercent { percent: u8 },
+    FaintedPokemonCannotAttack,
+    FaintedPokemonCannotBeTargeted,
+    FaintedPokemonCannotBattle,
 }
 
 impl StatPoints {

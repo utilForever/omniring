@@ -1,8 +1,8 @@
 //! cargo run --example practice_battle
 
-use omniring::battle::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
-use omniring::info::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};
-use omniring::pokedex::build_pokemon_from_pokedex_with_item;
+use omniring::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
+use omniring::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};
+use omniring::build_pokemon_from_pokedex_with_item;
 
 fn main() {
     let stat_points = StatPoints {
@@ -38,7 +38,7 @@ fn main() {
     print_pokemon(&dragonite);
     print_pokemon(&lucario);
 
-    let planned_turns = [(2, 0), (0, 1), (1, 3)];
+    let planned_turns = [(2, 0), (0, 1), (1, 3), (2, 3), (1, 0), (1, 2)];
     for (turn_index, (dragonite_move, lucario_move)) in planned_turns.iter().copied().enumerate() {
         if dragonite.is_fainted() || lucario.is_fainted() {
             break;
@@ -46,6 +46,15 @@ fn main() {
 
         println!();
         println!("Turn {}", turn_index + 1);
+        println!(
+            "HP before turn: {} {}/{} | {} {}/{}",
+            dragonite.name,
+            dragonite.current_hp,
+            dragonite.stats.hp,
+            lucario.name,
+            lucario.current_hp,
+            lucario.stats.hp
+        );
         println!(
             "{} chooses {} / {} chooses {}",
             dragonite.name,

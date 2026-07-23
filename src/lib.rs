@@ -15,6 +15,8 @@ pub use state::{
     BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,
     TeamPreviewObservation, TeamState,
 };
+pub use battle::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
+pub use info::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};
 pub use pokedex::{
     build_pokemon_from_pokedex, build_pokemon_from_pokedex_with_item, find_pokemon, pokedex,
 };

@@ -1,5 +1,4 @@
-use crate::info::{BattleError, Move, MoveCategory, MoveEffect, Pokemon, type_effectiveness};
-use rand::Rng;
+use crate::info::{BattleError, Move, MoveCategory, Pokemon, type_effectiveness};
 
 pub const DAMAGE_RANDOM_RAW_MIN: u8 = 217;
 pub const DAMAGE_RANDOM_RAW_MAX: u8 = 255;
@@ -62,9 +61,8 @@ impl Default for DamageModifiers {
 }
 
 impl DamageModifiers {
-    pub fn with_raw_random_roll(mut self) -> Self {
-        let mut rng = rand::thread_rng();
-        let raw_roll = rng.gen_range(DAMAGE_RANDOM_RAW_MIN..=DAMAGE_RANDOM_RAW_MAX);
+    pub fn with_raw_random_roll(mut self) -> Result<Self, BattleError> {
+        let raw_roll = rand::random_range(DAMAGE_RANDOM_RAW_MIN..=DAMAGE_RANDOM_RAW_MAX);
         self.random_percent = damage_random_percent_from_raw(raw_roll)?;
         Ok(self)
     }
@@ -235,17 +233,17 @@ fn execute_move(
         .get(move_index)
         .ok_or(BattleError::InvalidMoveIndex { index: move_index })?;
 
-    if defender_is_protected && selected_move.effect == MoveEffect::Damage {
-        return Ok(AttackOutcome {
-            attacker: attacker.name.clone(),
-            defender: defender.name.clone(),
-            move_name: selected_move.name.clone(),
-            damage: 0,
-            effectiveness: 1.0,
-            blocked: true,
-            defender_hp_after: defender.current_hp,
-        });
-    }
+    // if defender_is_protected && selected_move.effect == MoveEffect::Damage {
+    //     return Ok(AttackOutcome {
+    //         attacker: attacker.name.clone(),
+    //         defender: defender.name.clone(),
+    //         move_name: selected_move.name.clone(),
+    //         damage: 0,
+    //         effectiveness: 1.0,
+    //         blocked: true,
+    //         defender_hp_after: defender.current_hp,
+    //     });
+    // }
 
     let damage_result = calculate_damage(attacker, defender, selected_move)?;
     defender.current_hp = defender.current_hp.saturating_sub(damage_result.damage);
@@ -329,13 +327,15 @@ fn resolve_turn_order(
     let second = if slower.is_fainted() {
         None
     } else {
-        let faster_is_protected = faster_move.effect == MoveEffect::ProtectUser;
-        Some(execute_move(
-            slower,
-            faster,
-            slower_move_index,
-            faster_is_protected,
-        )?)
+        Some(execute_move(slower, faster, slower_move_index, false)?)
+        
+        // let faster_is_protected = faster_move.effect == MoveEffect::ProtectUser;
+        // Some(execute_move(
+        //     slower,
+        //     faster,
+        //     slower_move_index,
+        //     faster_is_protected,
+        // )?)
     };
 
     Ok(TurnOutcome {
