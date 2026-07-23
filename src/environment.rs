@@ -86,19 +86,29 @@ where
             });
         }
 
-        let battle = self.battle.as_mut().unwrap();
-        let previous = battle.state().clone();
-        let state = battle.play_turn(action, opponent_action, &mut self.transition)?;
+        let previous = self.battle.as_ref().unwrap().clone();
+        let opponent_revealed = self.opponent_revealed;
+        let outcome = (|| {
+            let battle = self.battle.as_mut().unwrap();
+            let state = battle.play_turn(action, opponent_action, &mut self.transition)?;
 
-        if let Some(active) = state.opponent.slot_active() {
-            self.opponent_revealed[active] = true;
+            if let Some(active) = state.opponent.slot_active() {
+                self.opponent_revealed[active] = true;
+            }
+
+            Ok(StepOutcome {
+                observation: Observation::Battle(observation(state, self.opponent_revealed)?),
+                reward: calculate_reward(previous.state(), state),
+                terminated: state.terminated,
+            })
+        })();
+
+        if outcome.is_err() {
+            self.battle = Some(previous);
+            self.opponent_revealed = opponent_revealed;
         }
 
-        Ok(StepOutcome {
-            observation: Observation::Battle(observation(state, self.opponent_revealed)?),
-            reward: calculate_reward(&previous, state),
-            terminated: state.terminated,
-        })
+        outcome
     }
 }
 
@@ -205,29 +215,53 @@ mod tests {
     }
 
     #[test]
-    fn reports_a_transition_that_breaks_the_reveal_invariant() {
+    fn rolls_back_failed_transitions_and_observations() {
         let preview = TeamPreviewObservation {
             player: roster(100),
             opponent: roster(100),
         };
+        let transitions = Cell::new(0);
         let mut environment = Environment::new(preview, [0, 1, 2], |state, _, _| {
-            state.opponent = TeamState::new(
-                roster(100),
-                [false, true, true, true, false, false],
-                Some(1),
-            )
-            .unwrap();
-            Ok(())
+            let turn = transitions.get();
+            transitions.set(turn + 1);
+
+            match turn {
+                0 => {
+                    state.terminated = true;
+                    Err(ActionError::InvalidSwitch)
+                }
+                1 => {
+                    state.opponent = TeamState::new(
+                        roster(100),
+                        [false, true, true, true, false, false],
+                        Some(1),
+                    )
+                    .unwrap();
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
         })
         .unwrap();
 
-        environment
+        let selected = environment
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
         assert_eq!(
             environment.step(Action::Move(0), Action::Move(0)),
+            Err(ActionError::InvalidSwitch)
+        );
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)),
             Err(ActionError::InvalidTeamSelection)
         );
+
+        let retried = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+
+        assert_eq!(retried.observation, selected.observation);
+        assert_eq!(retried.reward, 0.0);
+        assert!(!retried.terminated);
+        assert_eq!(transitions.get(), 3);
     }
 
     fn state(opponent_hp: [u32; 3], terminated: bool) -> BattleState {
