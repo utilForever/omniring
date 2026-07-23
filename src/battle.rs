@@ -36,3 +36,64 @@ impl Battle {
         Ok(&self.state)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Battle;
+    use crate::{Action, ActionError, BattleState, PokemonState, TeamState};
+
+    #[test]
+    fn validates_delegates_and_stops_after_termination() {
+        let mut battle = Battle::new(state());
+
+        assert_eq!(
+            battle.play_turn(Action::Switch(1), Action::Move(0), |_, _, _| unreachable!()),
+            Err(ActionError::WrongPhase)
+        );
+        assert_eq!(
+            battle.play_turn(Action::Move(0), Action::Move(1), |_, _, _| unreachable!()),
+            Err(ActionError::UnavailableMove)
+        );
+        assert_eq!(
+            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _| Err(
+                ActionError::InvalidSwitch
+            )),
+            Err(ActionError::InvalidSwitch)
+        );
+
+        let state = battle
+            .play_turn(
+                Action::Move(1),
+                Action::Move(2),
+                |state, player, opponent| {
+                    assert_eq!((player, opponent), (Action::Move(1), Action::Move(2)));
+                    state.terminated = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert!(state.terminated);
+        assert_eq!(
+            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _| unreachable!()),
+            Err(ActionError::BattleTerminated)
+        );
+    }
+
+    fn state() -> BattleState {
+        BattleState {
+            player: team([true; 4]),
+            opponent: team([true, false, true, true]),
+            terminated: false,
+        }
+    }
+
+    fn team(move_availability: [bool; 4]) -> TeamState {
+        TeamState::new(
+            std::array::from_fn(|_| PokemonState::new(100, 100, move_availability).unwrap()),
+            [true, true, true, false, false, false],
+            Some(0),
+        )
+        .unwrap()
+    }
+}
