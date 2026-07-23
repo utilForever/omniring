@@ -2,6 +2,10 @@ mod action;
 mod environment;
 mod reward;
 mod state;
+mod battle;
+mod info;
+mod pokedex;
+mod techdex;
 
 pub use action::{Action, ActionError};
 pub use environment::{Environment, Observation, StepOutcome};
@@ -10,13 +14,6 @@ pub use state::{
     BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,
     TeamPreviewObservation, TeamState,
 };
-
-
-mod battle;
-mod info;
-mod pokedex;
-mod techdex;
-
 pub use pokedex::{
     build_pokemon_from_pokedex, build_pokemon_from_pokedex_with_item, find_pokemon, pokedex,
 };
