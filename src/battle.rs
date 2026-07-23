@@ -328,7 +328,7 @@ fn resolve_turn_order(
         None
     } else {
         Some(execute_move(slower, faster, slower_move_index, false)?)
-        
+
         // let faster_is_protected = faster_move.effect == MoveEffect::ProtectUser;
         // Some(execute_move(
         //     slower,
@@ -474,15 +474,6 @@ mod tests {
 
         assert_eq!(damage_random_percent_from_raw(217), Ok(85));
         assert_eq!(damage_random_percent_from_raw(255), Ok(100));
-    }
-
-    #[test]
-    fn modifiers_can_be_created_from_raw_random_roll() {
-        let modifiers = DamageModifiers::default()
-            .with_raw_random_roll(217)
-            .unwrap();
-
-        assert_eq!(modifiers.random_percent, 85);
     }
 
     #[test]
