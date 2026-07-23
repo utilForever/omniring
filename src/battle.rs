@@ -400,16 +400,16 @@ mod tests {
         .unwrap()
     }
 
-    fn lucario() -> Pokemon {
-        build_pokemon_from_pokedex(
-            "Lucario",
-            50,
-            valid_stat_points(),
-            Nature::neutral(),
-            ["Aura Sphere", "Quick Attack", "Detect", "Close Combat"],
-        )
-        .unwrap()
-    }
+    // fn lucario() -> Pokemon {
+    //     build_pokemon_from_pokedex(
+    //         "Lucario",
+    //         50,
+    //         valid_stat_points(),
+    //         Nature::neutral(),
+    //         ["Aura Sphere", "Quick Attack", "Detect", "Close Combat"],
+    //     )
+    //     .unwrap()
+    // }
 
     fn dragonite() -> Pokemon {
         build_pokemon_from_pokedex(
