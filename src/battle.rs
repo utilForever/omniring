@@ -137,10 +137,15 @@ pub fn calculate_damage_with_modifiers(
 
     let (attack, defense) = match selected_move.category {
         MoveCategory::Physical => (attacker.stats.attack, defender.stats.defense),
-        MoveCategory::Special => (attacker.stats.special_attack, defender.stats.special_defense),
+        MoveCategory::Special => (
+            attacker.stats.special_attack,
+            defender.stats.special_defense,
+        ),
         MoveCategory::Status => unreachable!("status moves return before damage calculation"),
     };
-    let power = modifiers.power_modifier.apply_to(u64::from(selected_move.power))?;
+    let power = modifiers
+        .power_modifier
+        .apply_to(u64::from(selected_move.power))?;
     let attack = modifiers.attack_modifier.apply_to(u64::from(attack))?;
     let defense = modifiers.defense_modifier.apply_to(u64::from(defense))?;
     if defense == 0 {

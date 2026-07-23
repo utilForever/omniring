@@ -1,8 +1,8 @@
 //! cargo run --example practice_battle
 
+use omniring::build_pokemon_from_pokedex_with_item;
 use omniring::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
 use omniring::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};
-use omniring::build_pokemon_from_pokedex_with_item;
 
 fn main() {
     let stat_points = StatPoints {

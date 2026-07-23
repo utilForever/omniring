@@ -128,7 +128,7 @@ pub struct Pokemon {
     pub level: u8,
     pub primary_type: PokemonType,
     pub secondary_type: Option<PokemonType>,
-    
+
     pub stats: Stats,
     pub stat_points: StatPoints,
     pub nature: Nature,
