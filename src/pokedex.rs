@@ -1,9 +1,3 @@
-//! Pokemon species data for final-evolution Pokemon planned for this simulator.
-//!
-//! A `PokemonEntry` stores species-level facts: name, typing, base stats, and
-//! the moves this sample dataset allows that species to learn. Battle-ready
-//! Pokemon are built from this data by selecting four move names.
-
 use crate::info::{
     BattleError, HeldItem, Nature, Pokemon, PokemonSpec, PokemonType, StatPoints, Stats,
 };

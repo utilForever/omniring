@@ -1,10 +1,3 @@
-//! Single-battle turn resolution and damage calculation.
-//!
-//! Functions in this file operate on two already-built `Pokemon` values. They
-//! choose action order from move priority and Speed, then apply deterministic
-//! damage. Random accuracy, critical hits, status effects, and stat-stage
-//! changes are not implemented yet.
-
 use crate::info::{BattleError, Move, MoveCategory, Pokemon, type_effectiveness_against};
 
 #[derive(Debug, Clone, PartialEq)]

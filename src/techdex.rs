@@ -1,9 +1,3 @@
-//! Move data used by the simulator.
-//!
-//! This file is deliberately limited to move facts such as type, category,
-//! power, accuracy, and priority. Species-specific learnsets live in
-//! `pokedex.rs`.
-
 use crate::info::{Move, MoveCategory, PokemonType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +151,14 @@ pub const SHADOW_BALL: MoveEntry = move_entry(
     100,
     0,
 );
-pub const HEX: MoveEntry = move_entry("Hex", PokemonType::Ghost, MoveCategory::Special, 65, 100, 0);
+pub const HEX: MoveEntry = move_entry(
+    "Hex", 
+    PokemonType::Ghost,
+    MoveCategory::Special, 
+    65, 
+    100, 
+    0
+);
 pub const HYPNOSIS: MoveEntry = move_entry(
     "Hypnosis",
     PokemonType::Psychic,

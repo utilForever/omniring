@@ -1,7 +1,4 @@
-//! Run with: `cargo run --example practice_battle`
-//!
-//! This example builds two Pokemon from the pokedex, gives them four selected
-//! moves, and prints a short single-battle log.
+//! cargo run --example practice_battle
 
 use omniring::battle::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
 use omniring::info::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};

@@ -1,25 +1,9 @@
-//! Shared data types and rule constants for the single-battle simulator.
-//!
-//! This file intentionally holds concepts that are not tied to a specific
-//! Pokemon species or a specific move: battle rules, types, stats, held Mega
-//! Stones, runtime Pokemon state, and the type-effectiveness chart.
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleFormat {
     Singles,
     // Doubles,
 }
 
-// Battle modes are intentionally out of scope while the simulator focuses on
-// single battles.
-// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-// pub enum BattleMode {
-//     Ranked,
-//     Casual,
-//     Private,
-// }
-
-// Mega Stones are the only active battle mechanic for now.
 // #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 // pub enum BattleMechanic {
 //     None,
@@ -30,7 +14,6 @@ pub enum BattleFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChampionsRules {
     pub format: BattleFormat,
-    // pub mode: BattleMode,
     pub level_cap: u8,
     pub team_size: u8,
     pub selected_team_size: u8,
@@ -145,7 +128,7 @@ pub struct Pokemon {
     pub level: u8,
     pub primary_type: PokemonType,
     pub secondary_type: Option<PokemonType>,
-    /// Current battle stats used directly by damage and turn-order formulas.
+    
     pub stats: Stats,
     pub stat_points: StatPoints,
     pub nature: Nature,
