@@ -257,6 +257,34 @@ pub const HURRICANE: MoveEntry = move_entry(
     0,
 );
 
+pub const ROCK_SLIDE: MoveEntry = move_entry(
+    "Rock Slide",
+    PokemonType::Rock,
+    MoveCategory::Physical,
+    75,
+    90,
+    0,
+);
+
+pub const PROTECT: MoveEntry = move_entry(
+    "Protect",
+    PokemonType::Normal,
+    MoveCategory::Status,
+    0,
+    100,
+    4,
+);
+
+pub const DETECT: MoveEntry = move_entry(
+    "Detect",
+    PokemonType::Fighting,
+    MoveCategory::Status,
+    0,
+    100,
+    4,
+);
+
+
 const MOVE_DICT: &[MoveEntry] = &[
     FLAMETHROWER,
     AIR_SLASH,
@@ -288,6 +316,9 @@ const MOVE_DICT: &[MoveEntry] = &[
     FIRE_PUNCH,
     THUNDER_PUNCH,
     HURRICANE,
+    ROCK_SLIDE,
+    PROTECT,
+    DETECT,
 ];
 
 pub fn techdex() -> &'static [MoveEntry] {
@@ -326,7 +357,7 @@ mod tests {
     fn contains_only_move_data() {
         let extreme_speed = find_move("Extreme Speed").unwrap();
 
-        assert_eq!(techdex().len(), 30);
+        assert_eq!(techdex().len(), 33);
         assert_eq!(extreme_speed.priority, 2);
         assert_eq!(extreme_speed.move_type, PokemonType::Normal);
     }

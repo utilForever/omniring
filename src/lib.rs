@@ -9,12 +9,14 @@ mod techdex;
 
 pub use action::{Action, ActionError};
 pub use battle::{
-    DAMAGE_RANDOM_PERCENT_TABLE, DAMAGE_RANDOM_RAW_MAX, DAMAGE_RANDOM_RAW_MIN,damage_random_percent_from_raw, DamageModifiers,
-    execute_attack,AttackOutcome, TurnOrder, determine_turn_order, simulate_turn,
+    AttackOutcome, DAMAGE_RANDOM_PERCENT_TABLE, DAMAGE_RANDOM_RAW_MAX, DAMAGE_RANDOM_RAW_MIN,
+    DamageModifiers, TurnOrder, damage_random_percent_from_raw, determine_turn_order,
+    execute_attack, simulate_turn,
 };
 pub use environment::{Environment, Observation, StepOutcome};
-pub use info::{BattleFormat, ChampionsRules, type_effectiveness_against,
-    HeldItem, MegaStone, Nature, Pokemon, StatPoints
+pub use info::{
+    BattleFormat, ChampionsRules, HeldItem, MegaStone, Nature, Pokemon, StatPoints,
+    type_effectiveness_against,
 };
 pub use pokedex::{
     build_pokemon_from_pokedex, build_pokemon_from_pokedex_with_item, find_pokemon, pokedex,

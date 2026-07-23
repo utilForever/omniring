@@ -62,6 +62,11 @@ pub enum MoveCategory {
     Status,
 }
 
+// pub enum MoveEffect {
+//     None,
+//     ProtectUser,
+// }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stats {
     pub hp: u16,
