@@ -284,7 +284,6 @@ pub const DETECT: MoveEntry = move_entry(
     4,
 );
 
-
 const MOVE_DICT: &[MoveEntry] = &[
     FLAMETHROWER,
     AIR_SLASH,
