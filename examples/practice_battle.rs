@@ -80,12 +80,12 @@ fn main() {
 
 fn print_pokemon(pokemon: &Pokemon) {
     println!(
-        "{} Lv.{} HP {}/{} Mega-ready: {}",
+        "{} | Lv.{} | HP {}/{} | Mega-ready: {}",
         pokemon.name, pokemon.level, pokemon.current_hp, pokemon.stats.hp, pokemon.can_mega_evolve
     );
     for (index, move_slot) in pokemon.moves.iter().enumerate() {
         println!(
-            "  Slot {}: {} priority {} power {} accuracy {}",
+            "  Slot {}: {} | priority {} | power {} | accuracy {}",
             index, move_slot.name, move_slot.priority, move_slot.power, move_slot.accuracy
         );
     }
