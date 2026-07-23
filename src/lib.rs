@@ -8,9 +8,14 @@ mod state;
 mod techdex;
 
 pub use action::{Action, ActionError};
-pub use battle::{AttackOutcome, TurnOrder, determine_turn_order, simulate_turn};
+pub use battle::{
+    DAMAGE_RANDOM_PERCENT_TABLE, DAMAGE_RANDOM_RAW_MAX, DAMAGE_RANDOM_RAW_MIN,damage_random_percent_from_raw, DamageModifiers,
+    execute_attack,AttackOutcome, TurnOrder, determine_turn_order, simulate_turn,
+};
 pub use environment::{Environment, Observation, StepOutcome};
-pub use info::{HeldItem, MegaStone, Nature, Pokemon, StatPoints};
+pub use info::{BattleFormat, ChampionsRules, type_effectiveness_against,
+    HeldItem, MegaStone, Nature, Pokemon, StatPoints
+};
 pub use pokedex::{
     build_pokemon_from_pokedex, build_pokemon_from_pokedex_with_item, find_pokemon, pokedex,
 };

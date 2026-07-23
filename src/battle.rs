@@ -238,17 +238,17 @@ fn execute_move(
         .get(move_index)
         .ok_or(BattleError::InvalidMoveIndex { index: move_index })?;
 
-    // if defender_is_protected && selected_move.effect == MoveEffect::Damage {
-    //     return Ok(AttackOutcome {
-    //         attacker: attacker.name.clone(),
-    //         defender: defender.name.clone(),
-    //         move_name: selected_move.name.clone(),
-    //         damage: 0,
-    //         effectiveness: 1.0,
-    //         blocked: true,
-    //         defender_hp_after: defender.current_hp,
-    //     });
-    // }
+    if defender_is_protected { // && selected_move.effect == MoveEffect::Damage {
+        return Ok(AttackOutcome {
+            attacker: attacker.name.clone(),
+            defender: defender.name.clone(),
+            move_name: selected_move.name.clone(),
+            damage: 0,
+            effectiveness: 1.0,
+            blocked: true,
+            defender_hp_after: defender.current_hp,
+        });
+    }
 
     let damage_result = calculate_damage(attacker, defender, selected_move)?;
     defender.current_hp = defender.current_hp.saturating_sub(damage_result.damage);
@@ -327,7 +327,7 @@ fn resolve_turn_order(
     slower: &mut Pokemon,
     slower_move_index: usize,
 ) -> Result<TurnOutcome, BattleError> {
-    let faster_move = faster.moves[faster_move_index].clone();
+    // let faster_move = faster.moves[faster_move_index].clone();
     let first = execute_move(faster, slower, faster_move_index, false)?;
     let second = if slower.is_fainted() {
         None
