@@ -13,7 +13,6 @@ pub use state::{
     TeamPreviewObservation, TeamState,
 };
 
-
 mod battle_logic;
 mod info;
 mod pokedex;
