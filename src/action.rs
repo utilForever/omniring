@@ -1,4 +1,4 @@
-use crate::state::{BattleState, TeamPreviewObservation};
+use crate::state::{BattleState, TeamPreviewObservation, TeamState};
 
 /// An action available during team preview or a battle turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,23 +51,25 @@ impl BattleState {
             return Err(ActionError::BattleTerminated);
         }
 
+        self.player.validate_action(action)
+    }
+}
+
+impl TeamState {
+    pub(crate) fn validate_action(&self, action: Action) -> Result<(), ActionError> {
         match action {
             Action::Move(slot)
-                if self.player.slot_active().is_some_and(|active| {
-                    self.player.roster()[active]
-                        .move_availability
-                        .get(slot)
-                        .copied()
-                        == Some(true)
+                if self.slot_active().is_some_and(|active| {
+                    self.roster()[active].move_availability.get(slot).copied() == Some(true)
                 }) =>
             {
                 Ok(())
             }
             Action::Move(_) => Err(ActionError::UnavailableMove),
             Action::Switch(slot)
-                if self.player.selected().get(slot).copied() == Some(true)
-                    && self.player.slot_active() != Some(slot)
-                    && self.player.roster()[slot].hp_curr() > 0 =>
+                if self.selected().get(slot).copied() == Some(true)
+                    && self.slot_active() != Some(slot)
+                    && self.roster()[slot].hp_curr() > 0 =>
             {
                 Ok(())
             }

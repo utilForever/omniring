@@ -13,11 +13,6 @@ pub use battle_logic::{
     DamageModifiers, TurnOrder, damage_random_percent_from_raw, determine_turn_order,
     execute_attack, simulate_turn,
 };
-pub use environment::{Environment, Observation, StepOutcome};
-pub use info::{
-    BattleFormat, ChampionsRules, HeldItem, MegaStone, Nature, Pokemon, StatPoints,
-    type_effectiveness_against,
-};
 pub use pokedex::{
     build_pokemon_from_pokedex, build_pokemon_from_pokedex_with_item, find_pokemon, pokedex,
 };
