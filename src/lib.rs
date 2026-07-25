@@ -1,5 +1,5 @@
 mod action;
-mod battle;
+mod battle_logic;
 mod environment;
 mod info;
 mod pokedex;
@@ -8,7 +8,7 @@ mod state;
 mod techdex;
 
 pub use action::{Action, ActionError};
-pub use battle::{
+pub use battle_logic::{
     AttackOutcome, DAMAGE_RANDOM_PERCENT_TABLE, DAMAGE_RANDOM_RAW_MAX, DAMAGE_RANDOM_RAW_MIN,
     DamageModifiers, TurnOrder, damage_random_percent_from_raw, determine_turn_order,
     execute_attack, simulate_turn,
