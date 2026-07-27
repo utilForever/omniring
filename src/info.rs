@@ -248,6 +248,7 @@ pub struct Pokemon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleError {
     InvalidMoveIndex { index: usize },
+    LevelExceedsCap { level: u8, cap: u8 },
     InvalidStatPoints,
     InvalidDamageModifier,
     InvalidDamageRandomRawRoll { raw_roll: u8 },
@@ -325,10 +326,10 @@ impl Move {
 }
 
 pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
-    let numerator = (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
-    (numerator / 100 + 10 + u32::from(level)) as u16
     // Stat calculation formula of HP
     // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
+    let numerator = (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+    (numerator / 100 + 10 + u32::from(level)) as u16
 }
 
 impl Pokemon {
@@ -340,13 +341,24 @@ impl Pokemon {
         item: Option<HeldItem>,
         moves: [Move; 4],
     ) -> Result<Self, BattleError> {
+        let level_cap = ChampionsRules::singles().level_cap;
+
+        if level > level_cap {
+            return Err(BattleError::LevelExceedsCap {
+                level,
+                cap: level_cap,
+            });
+        }
+
         if !stat_points.is_valid_for_champions() {
             return Err(BattleError::InvalidStatPoints);
         }
+
         let max_hp = calculate_max_hp(entry.base_stats.hp, level, stat_points.hp);
         let can_mega_evolve = item
             .as_ref()
             .is_some_and(|i| i.is_mega_stone_for(entry.name));
+
         Ok(Self {
             entry,
             level,

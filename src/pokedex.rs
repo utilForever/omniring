@@ -21,7 +21,6 @@ pub enum PokedexError {
     PokemonNotFound,
     MoveNotLearnable { slot: usize },
     InvalidPokemon(BattleError),
-    InvalidPokemonSpec,
 }
 
 impl From<BattleError> for PokedexError {
@@ -139,8 +138,7 @@ pub fn build_pokemon_from_pokedex_with_item(
         find_learnable_move(species, move_names[3], 3)?.to_move(),
     ];
 
-    Pokemon::new(species, level, stat_points, nature, item, moves)
-        .map_err(|_| PokedexError::InvalidPokemonSpec)
+    Pokemon::new(species, level, stat_points, nature, item, moves).map_err(PokedexError::from)
 }
 
 fn find_learnable_move(
@@ -242,6 +240,25 @@ mod tests {
         assert_eq!(lucario.moves[1].name, "Quick Attack");
         assert_eq!(lucario.moves[1].priority, 1);
         assert!(lucario.item.is_none());
+    }
+
+    #[test]
+    fn rejects_pokemon_above_singles_level_cap() {
+        let result = build_pokemon_from_pokedex(
+            "Lucario",
+            51,
+            valid_stat_points(),
+            Nature::Hardy,
+            ["Aura Sphere", "Quick Attack", "Metal Claw", "Close Combat"],
+        );
+
+        assert_eq!(
+            result,
+            Err(PokedexError::InvalidPokemon(BattleError::LevelExceedsCap {
+                level: 51,
+                cap: 50
+            }))
+        );
     }
 
     #[test]
