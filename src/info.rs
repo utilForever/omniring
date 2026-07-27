@@ -325,11 +325,8 @@ impl Move {
 }
 
 pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
-    let base = (2 * base_hp) as u32;
-    let level_factor = (level as u32) / 100;
-    let stat_points_factor = (stat_points as u32) / 100;
-
-    ((base + stat_points_factor) * level_factor + 10 + level as u32) as u16
+    let numerator = (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+    (numerator / 100 + 10 + u32::from(level)) as u16
 }
 
 impl Pokemon {
@@ -530,5 +527,20 @@ mod tests {
 
         assert!(charizard.can_mega_evolve);
         assert!(!charizard.has_mega_evolved);
+    }
+
+    #[test]
+    fn hp_calculation_reflects_base_hp_and_stat_points() {
+        let level = 50;
+
+        let hp_low_base = calculate_max_hp(60, level, 0);
+        assert_eq!(hp_low_base, 135);
+
+        let hp_high_base = calculate_max_hp(78, level, 0);
+        assert_eq!(hp_high_base, 153);
+
+        // 3. Stat Points가 변경되었을 때 HP가 달라지는지 검증 (Stat Points 0 -> 32)
+        let hp_with_stat_points = calculate_max_hp(78, level, 32);
+        assert_eq!(hp_with_stat_points, 185);
     }
 }
