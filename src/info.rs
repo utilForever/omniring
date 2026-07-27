@@ -327,6 +327,8 @@ impl Move {
 pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
     let numerator = (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
     (numerator / 100 + 10 + u32::from(level)) as u16
+    // Stat calculation formula of HP
+    // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
 }
 
 impl Pokemon {
@@ -539,7 +541,7 @@ mod tests {
         let hp_high_base = calculate_max_hp(78, level, 0);
         assert_eq!(hp_high_base, 153);
 
-        // 3. Stat Points가 변경되었을 때 HP가 달라지는지 검증 (Stat Points 0 -> 32)
+        // check HP goes with Stat Points (Stat Points 0 -> 32)
         let hp_with_stat_points = calculate_max_hp(78, level, 32);
         assert_eq!(hp_with_stat_points, 185);
     }
