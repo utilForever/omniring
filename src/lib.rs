@@ -14,4 +14,5 @@ pub use state::{
 };
 
 pub mod info;
+pub mod pokedex;
 pub mod techdex;
