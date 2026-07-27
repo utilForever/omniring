@@ -243,7 +243,7 @@ mod tests {
             "Lucario",
             50,
             valid_stat_points(),
-            Nature::neutral(),
+            Nature::Hardy,
             ["Aura Sphere", "Quick Attack", "Metal Claw", "Close Combat"],
         )
         .unwrap();
@@ -260,7 +260,7 @@ mod tests {
             "Lucario",
             50,
             valid_stat_points(),
-            Nature::neutral(),
+            Nature::Hardy,
             ["Aura Sphere", "Quick Attack", "Metal Claw", "Flamethrower"],
         );
 

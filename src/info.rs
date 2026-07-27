@@ -124,11 +124,6 @@ pub enum Nature {
 }
 
 impl Nature {
-    /// Returns the default neutral nature
-    pub fn neutral() -> Self {
-        Self::Hardy
-    }
-
     /// Returns the stat increased by this nature (+10%)
     pub fn increased(self) -> Option<StatName> {
         use Nature::*;
@@ -484,7 +479,7 @@ mod tests {
                 special_defense: 0,
                 speed: 0,
             },
-            nature: Nature::neutral(),
+            nature: Nature::Hardy,
             item: None,
             moves: [tackle(), tackle(), tackle(), tackle()],
         })
@@ -525,7 +520,7 @@ mod tests {
                 speed: 100,
             },
             stat_points: invalid_points,
-            nature: Nature::neutral(),
+            nature: Nature::Hardy,
             item: None,
             moves: [tackle(), tackle(), tackle(), tackle()],
         });
@@ -556,7 +551,7 @@ mod tests {
                 special_defense: 0,
                 speed: 0,
             },
-            nature: Nature::neutral(),
+            nature: Nature::Hardy,
             item: Some(HeldItem::MegaStone(MegaStone::CharizarditeX)),
             moves: [tackle(), tackle(), tackle(), tackle()],
         })
