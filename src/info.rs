@@ -85,51 +85,51 @@ pub enum StatName {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nature {
-    // 1. 무보정 (5종)
-    Hardy,   // 노력
-    Docile,  // 온순
-    Serious, // 진지
-    Bashful, // 수줍음
-    Quirky,  // 변덕
+    // 1. Neutral (5 natures)
+    Hardy,   // Neutral
+    Docile,  // Neutral
+    Serious, // Neutral
+    Bashful, // Neutral
+    Quirky,  // Neutral
 
-    // 2. 공격 상승 (4종)
-    Lonely,  // 외로움   (공+, 방-)
-    Adamant, // 고집     (공+, 특공-)
-    Naughty, // 개구쟁이 (공+, 특방-)
-    Brave,   // 용감     (공+, 스피드-)
+    // 2. Raises Attack (4 natures)
+    Lonely,  // Attack+, Defense-
+    Adamant, // Attack+, Special Attack-
+    Naughty, // Attack+, Special Defense-
+    Brave,   // Attack+, Speed-
 
-    // 3. 방어 상승 (4종)
-    Bold,    // 대담     (방+, 공-)
-    Impish,  // 장난꾸러기 (방+, 특공-)
-    Lax,     // 무사태평 (방+, 특방-)
-    Relaxed, // 건방     (방+, 스피드-)
+    // 3. Raises Defense (4 natures)
+    Bold,    // Defense+, Attack-
+    Impish,  // Defense+, Special Attack-
+    Lax,     // Defense+, Special Defense-
+    Relaxed, // Defense+, Speed-
 
-    // 4. 특수공격 상승 (4종)
-    Modest, // 조심     (특공+, 공-)
-    Mild,   // 의젓     (특공+, 방-)
-    Rash,   // 덜렁     (특공+, 특방-)
-    Quiet,  // 냉정     (특공+, 스피드-)
+    // 4. Raises Special Attack (4 natures)
+    Modest, // Special Attack+, Attack-
+    Mild,   // Special Attack+, Defense-
+    Rash,   // Special Attack+, Special Defense-
+    Quiet,  // Special Attack+, Speed-
 
-    // 5. 특수방어 상승 (4종)
-    Calm,    // 차분     (특방+, 공-)
-    Gentle,  // 얌전     (특방+, 방-)
-    Careful, // 신중     (특방+, 특공-)
-    Sassy,   // 건방     (특방+, 스피드-)
+    // 5. Raises Special Defense (4 natures)
+    Calm,    // Special Defense+, Attack-
+    Gentle,  // Special Defense+, Defense-
+    Careful, // Special Defense+, Special Attack-
+    Sassy,   // Special Defense+, Speed-
 
-    // 6. 스피드 상승 (4종)
-    Timid, // 겁쟁이   (스피드+, 공-)
-    Hasty, // 성성     (스피드+, 방-)
-    Jolly, // 명랑     (스피드+, 특공-)
-    Naive, // 천진난만 (스피드+, 특방-)
+    // 6. Raises Speed (4 natures)
+    Timid, // Speed+, Attack-
+    Hasty, // Speed+, Defense-
+    Jolly, // Speed+, Special Attack-
+    Naive, // Speed+, Special Defense-
 }
 
 impl Nature {
-    /// 기본/무보정 성격
+    /// Returns the default neutral nature
     pub fn neutral() -> Self {
         Self::Hardy
     }
 
-    /// 성격에 따른 상승 스탯 (+10%)
+    /// Returns the stat increased by this nature (+10%)
     pub fn increased(self) -> Option<StatName> {
         use Nature::*;
         use StatName::*;
@@ -144,7 +144,7 @@ impl Nature {
         }
     }
 
-    /// 성격에 따른 하락 스탯 (-10%)
+    /// Returns the stat decreased by this nature (-10%)
     pub fn decreased(self) -> Option<StatName> {
         use Nature::*;
         use StatName::*;
@@ -159,7 +159,7 @@ impl Nature {
         }
     }
 
-    /// 특정 스탯의 성격 보정 배율 (1.1, 0.9, 1.0)
+    /// Returns this nature's multiplier for a stat (1.1, 0.9, or 1.0)
     pub fn multiplier_for(self, stat: StatName) -> f32 {
         if self.increased() == Some(stat) {
             1.1
@@ -190,10 +190,10 @@ impl Stats {
         }
     }
 
-    /// Stats에 성격 보율(1.1 / 0.9)을 계산해 새로운 Stats를 반환합니다.
+    /// Applies the nature modifier (1.1 or 0.9) and returns the adjusted stats
     pub fn apply_nature(self, nature: Nature) -> Self {
         Self {
-            hp: self.hp, // HP는 성격 보정 없음
+            hp: self.hp, // Nature does not affect HP
             attack: (self.attack as f32 * nature.multiplier_for(StatName::Attack)) as u16,
             defense: (self.defense as f32 * nature.multiplier_for(StatName::Defense)) as u16,
             special_attack: (self.special_attack as f32
