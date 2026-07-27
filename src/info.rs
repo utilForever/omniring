@@ -1,3 +1,5 @@
+use crate::pokedex::PokemonEntry;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleFormat {
     Singles,
@@ -229,33 +231,18 @@ pub struct Move {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pokemon {
-    pub name: String,
-    pub level: u8,
-    pub primary_type: PokemonType,
-    pub secondary_type: Option<PokemonType>,
+    pub entry: &'static PokemonEntry,
 
-    pub base_stats: Stats,
+    pub level: u8,
     pub stat_points: StatPoints,
     pub nature: Nature,
     pub ability: Option<String>,
     pub item: Option<HeldItem>,
-    pub current_hp: u16,
     pub moves: [Move; 4],
+
+    pub current_hp: u16,
     pub can_mega_evolve: bool,
     pub has_mega_evolved: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PokemonSpec {
-    pub name: String,
-    pub level: u8,
-    pub primary_type: PokemonType,
-    pub secondary_type: Option<PokemonType>,
-    pub stats: Stats,
-    pub stat_points: StatPoints,
-    pub nature: Nature,
-    pub item: Option<HeldItem>,
-    pub moves: [Move; 4],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,27 +324,40 @@ impl Move {
     }
 }
 
+pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
+    let base = (2 * base_hp) as u32;
+    let level_factor = (level as u32) / 100;
+    let stat_points_factor = (stat_points as u32) / 100;
+
+    ((base + stat_points_factor) * level_factor + 10 + level as u32) as u16
+}
+
 impl Pokemon {
-    pub fn new(spec: PokemonSpec) -> Result<Self, BattleError> {
-        if !spec.stat_points.is_valid_for_champions() {
+    pub fn new(
+        entry: &'static PokemonEntry,
+        level: u8,
+        stat_points: StatPoints,
+        nature: Nature,
+        item: Option<HeldItem>,
+        moves: [Move; 4],
+    ) -> Result<Self, BattleError> {
+        if !stat_points.is_valid_for_champions() {
             return Err(BattleError::InvalidStatPoints);
         }
-
+        let max_hp = calculate_max_hp(entry.base_stats.hp, level, stat_points.hp);
+        let can_mega_evolve = item
+            .as_ref()
+            .is_some_and(|i| i.is_mega_stone_for(entry.name));
         Ok(Self {
-            can_mega_evolve: spec
-                .item
-                .is_some_and(|item| item.is_mega_stone_for(&spec.name)),
-            name: spec.name,
-            level: spec.level,
-            primary_type: spec.primary_type,
-            secondary_type: spec.secondary_type,
-            base_stats: spec.stats,
-            stat_points: spec.stat_points,
-            nature: spec.nature,
+            entry,
+            level,
+            stat_points,
+            nature,
             ability: None,
-            item: spec.item,
-            current_hp: spec.stats.hp,
-            moves: spec.moves,
+            item,
+            moves,
+            current_hp: max_hp,
+            can_mega_evolve,
             has_mega_evolved: false,
         })
     }
@@ -368,8 +368,8 @@ impl Pokemon {
 }
 
 pub fn type_effectiveness_against(attack_type: PokemonType, defender: &Pokemon) -> f32 {
-    let primary = type_effectiveness(attack_type, defender.primary_type);
-    let secondary = defender.secondary_type.map_or(1.0, |defense_type| {
+    let primary = type_effectiveness(attack_type, defender.entry.primary_type);
+    let secondary = defender.entry.secondary_type.map_or(1.0, |defense_type| {
         type_effectiveness(attack_type, defense_type)
     });
 
@@ -433,6 +433,7 @@ pub fn type_effectiveness(attack_type: PokemonType, defense_type: PokemonType) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pokedex::find_pokemon;
 
     fn tackle() -> Move {
         Move::new(
@@ -458,31 +459,21 @@ mod tests {
 
     #[test]
     fn type_chart_handles_dual_type_multiplier() {
-        let venusaur = Pokemon::new(PokemonSpec {
-            name: "Venusaur".to_string(),
-            level: 50,
-            primary_type: PokemonType::Grass,
-            secondary_type: Some(PokemonType::Poison),
-            stats: Stats {
-                hp: 100,
-                attack: 100,
-                defense: 100,
-                special_attack: 100,
-                special_defense: 100,
-                speed: 100,
-            },
-            stat_points: StatPoints {
-                hp: 0,
-                attack: 0,
-                defense: 0,
+        let venusaur = Pokemon::new(
+            find_pokemon("Venusaur").unwrap(),
+            50,
+            StatPoints {
+                hp: 32,
+                attack: 32,
+                defense: 2,
                 special_attack: 0,
                 special_defense: 0,
                 speed: 0,
             },
-            nature: Nature::Hardy,
-            item: None,
-            moves: [tackle(), tackle(), tackle(), tackle()],
-        })
+            Nature::Hardy,
+            None,
+            [tackle(), tackle(), tackle(), tackle()],
+        )
         .unwrap();
 
         assert_eq!(
@@ -506,55 +497,35 @@ mod tests {
             speed: 0,
         };
 
-        let result = Pokemon::new(PokemonSpec {
-            name: "Invalid".to_string(),
-            level: 50,
-            primary_type: PokemonType::Normal,
-            secondary_type: None,
-            stats: Stats {
-                hp: 100,
-                attack: 100,
-                defense: 100,
-                special_attack: 100,
-                special_defense: 100,
-                speed: 100,
-            },
-            stat_points: invalid_points,
-            nature: Nature::Hardy,
-            item: None,
-            moves: [tackle(), tackle(), tackle(), tackle()],
-        });
+        let result = Pokemon::new(
+            find_pokemon("Venusaur").unwrap(),
+            50,
+            invalid_points,
+            Nature::Hardy,
+            None,
+            [tackle(), tackle(), tackle(), tackle()],
+        );
 
         assert_eq!(result, Err(BattleError::InvalidStatPoints));
     }
 
     #[test]
     fn mega_stone_marks_compatible_pokemon_as_mega_evolvable() {
-        let charizard = Pokemon::new(PokemonSpec {
-            name: "Charizard".to_string(),
-            level: 50,
-            primary_type: PokemonType::Fire,
-            secondary_type: Some(PokemonType::Flying),
-            stats: Stats {
-                hp: 100,
-                attack: 100,
-                defense: 100,
-                special_attack: 100,
-                special_defense: 100,
-                speed: 100,
-            },
-            stat_points: StatPoints {
-                hp: 0,
-                attack: 0,
-                defense: 0,
+        let charizard = Pokemon::new(
+            find_pokemon("Charizard").unwrap(),
+            50,
+            StatPoints {
+                hp: 32,
+                attack: 32,
+                defense: 2,
                 special_attack: 0,
                 special_defense: 0,
                 speed: 0,
             },
-            nature: Nature::Hardy,
-            item: Some(HeldItem::MegaStone(MegaStone::CharizarditeX)),
-            moves: [tackle(), tackle(), tackle(), tackle()],
-        })
+            Nature::Hardy,
+            Some(HeldItem::MegaStone(MegaStone::CharizarditeX)),
+            [tackle(), tackle(), tackle(), tackle()],
+        )
         .unwrap();
 
         assert!(charizard.can_mega_evolve);

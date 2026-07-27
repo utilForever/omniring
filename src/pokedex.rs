@@ -1,6 +1,4 @@
-use crate::info::{
-    BattleError, HeldItem, Nature, Pokemon, PokemonSpec, PokemonType, StatPoints, Stats,
-};
+use crate::info::{BattleError, HeldItem, Nature, Pokemon, PokemonType, StatPoints, Stats};
 use crate::techdex::{
     AIR_SLASH, AURA_SPHERE, BITE, CLOSE_COMBAT, DARK_PULSE, DETECT, DRAGON_CLAW, DRAGON_DANCE,
     EXTREME_SPEED, FIRE_BLAST, FIRE_PUNCH, FLAMETHROWER, HEX, HURRICANE, HYDRO_PUMP, HYPNOSIS,
@@ -23,6 +21,7 @@ pub enum PokedexError {
     PokemonNotFound,
     MoveNotLearnable { slot: usize },
     InvalidPokemon(BattleError),
+    InvalidPokemonSpec,
 }
 
 impl From<BattleError> for PokedexError {
@@ -140,17 +139,8 @@ pub fn build_pokemon_from_pokedex_with_item(
         find_learnable_move(species, move_names[3], 3)?.to_move(),
     ];
 
-    Ok(Pokemon::new(PokemonSpec {
-        name: species.name.to_string(),
-        level,
-        primary_type: species.primary_type,
-        secondary_type: species.secondary_type,
-        stats: species.base_stats,
-        stat_points,
-        nature,
-        item,
-        moves,
-    })?)
+    Pokemon::new(species, level, stat_points, nature, item, moves)
+        .map_err(|_| PokedexError::InvalidPokemonSpec)
 }
 
 fn find_learnable_move(
