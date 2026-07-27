@@ -12,3 +12,7 @@ pub use state::{
     BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,
     TeamPreviewObservation, TeamState,
 };
+
+pub mod info;
+pub mod pokedex;
+pub mod techdex;
