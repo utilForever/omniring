@@ -234,6 +234,7 @@ pub struct Pokemon {
     pub entry: &'static PokemonEntry,
 
     pub level: u8,
+    pub stats: Stats,
     pub stat_points: StatPoints,
     pub nature: Nature,
     pub ability: Option<String>,
@@ -325,11 +326,42 @@ impl Move {
     }
 }
 
-pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
-    // Stat calculation formula of HP
-    // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
-    let numerator = (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
-    (numerator / 100 + 10 + u32::from(level)) as u16
+impl Stats {
+    pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
+        // Stat calculation formula of HP
+        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
+        let numerator =
+            (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+        (numerator / 100 + 10 + u32::from(level)) as u16
+    }
+
+    pub fn calculate_single_stat(base_stat: u16, level: u8, stat_points: u8) -> u16 {
+        // Stat calculation formula of other stats (Attack, Defense, Special Attack, Special Defense, Speed)
+        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
+        let numerator =
+            (2 * u32::from(base_stat) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+        (numerator / 100 + 5) as u16
+    }
+
+    pub fn calculate(&self, level: u8, stat_points: StatPoints, nature: Nature) -> Self {
+        let raw_stats = Self {
+            hp: Self::calculate_max_hp(self.hp, level, stat_points.hp),
+            attack: Self::calculate_single_stat(self.attack, level, stat_points.attack),
+            defense: Self::calculate_single_stat(self.defense, level, stat_points.defense),
+            special_attack: Self::calculate_single_stat(
+                self.special_attack,
+                level,
+                stat_points.special_attack,
+            ),
+            special_defense: Self::calculate_single_stat(
+                self.special_defense,
+                level,
+                stat_points.special_defense,
+            ),
+            speed: Self::calculate_single_stat(self.speed, level, stat_points.speed),
+        };
+        raw_stats.apply_nature(nature)
+    }
 }
 
 impl Pokemon {
@@ -354,7 +386,8 @@ impl Pokemon {
             return Err(BattleError::InvalidStatPoints);
         }
 
-        let max_hp = calculate_max_hp(entry.base_stats.hp, level, stat_points.hp);
+        let stats = entry.base_stats.calculate(level, stat_points, nature);
+        let max_hp = stats.hp;
         let can_mega_evolve = item
             .as_ref()
             .is_some_and(|i| i.is_mega_stone_for(entry.name));
@@ -362,6 +395,7 @@ impl Pokemon {
         Ok(Self {
             entry,
             level,
+            stats,
             stat_points,
             nature,
             ability: None,
@@ -547,14 +581,14 @@ mod tests {
     fn hp_calculation_reflects_base_hp_and_stat_points() {
         let level = 50;
 
-        let hp_low_base = calculate_max_hp(60, level, 0);
+        let hp_low_base = Stats::calculate_max_hp(60, level, 0);
         assert_eq!(hp_low_base, 135);
 
-        let hp_high_base = calculate_max_hp(78, level, 0);
+        let hp_high_base = Stats::calculate_max_hp(78, level, 0);
         assert_eq!(hp_high_base, 153);
 
         // check HP goes with Stat Points (Stat Points 0 -> 32)
-        let hp_with_stat_points = calculate_max_hp(78, level, 32);
+        let hp_with_stat_points = Stats::calculate_max_hp(78, level, 32);
         assert_eq!(hp_with_stat_points, 185);
     }
 }
