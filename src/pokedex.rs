@@ -1,11 +1,5 @@
 use crate::info::{BattleError, HeldItem, Nature, Pokemon, PokemonType, StatPoints, Stats};
-use crate::techdex::{
-    AIR_SLASH, AURA_SPHERE, BITE, CLOSE_COMBAT, DARK_PULSE, DETECT, DRAGON_CLAW, DRAGON_DANCE,
-    EXTREME_SPEED, FIRE_BLAST, FIRE_PUNCH, FLAMETHROWER, HEX, HURRICANE, HYDRO_PUMP, HYPNOSIS,
-    METAL_CLAW, MoveEntry, PROTECT, QUICK_ATTACK, RAPID_SPIN, RAZOR_LEAF, ROCK_SLIDE, SEED_BOMB,
-    SHADOW_BALL, SHADOW_SNEAK, SLEEP_POWDER, SOLAR_BEAM, SWORDS_DANCE, THUNDER_PUNCH, VINE_WHIP,
-    WATER_GUN, WATER_PULSE, WING_ATTACK,
-};
+use crate::techdex::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PokemonEntry {
@@ -55,6 +49,7 @@ const DRAGONITE_MOVES: &[MoveEntry] = &[
     THUNDER_PUNCH,
     HURRICANE,
     ROCK_SLIDE,
+    DRAGON_TAIL,
 ];
 
 const POKEMON_DICT: &[PokemonEntry] = &[

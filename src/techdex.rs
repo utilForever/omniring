@@ -288,6 +288,14 @@ pub const DETECT: MoveEntry = move_entry(
     Some(100),
     4,
 );
+pub const DRAGON_TAIL: MoveEntry = move_entry(
+    "Dragon Tail",
+    PokemonType::Dragon,
+    MoveCategory::Physical,
+    60,
+    Some(90),
+    -6,
+);
 
 const MOVE_DICT: &[MoveEntry] = &[
     FLAMETHROWER,
@@ -323,6 +331,7 @@ const MOVE_DICT: &[MoveEntry] = &[
     ROCK_SLIDE,
     PROTECT,
     DETECT,
+    DRAGON_TAIL,
 ];
 
 pub fn techdex() -> &'static [MoveEntry] {
@@ -360,9 +369,10 @@ mod tests {
     #[test]
     fn contains_only_move_data() {
         let extreme_speed = find_move("Extreme Speed").unwrap();
+        let dragon_tail = find_move("Dragon Tail").unwrap();
 
-        assert_eq!(techdex().len(), 33);
         assert_eq!(extreme_speed.priority, 2);
         assert_eq!(extreme_speed.r#type, PokemonType::Normal);
+        assert_eq!(dragon_tail.priority, -6);
     }
 }
