@@ -62,19 +62,16 @@ impl Default for DamageModifier {
 }
 
 impl DamageModifier {
-    pub const DAMAGE_RANDOM_RAW_MIN: u8 = 217;
-    pub const DAMAGE_RANDOM_RAW_MAX: u8 = 255;
-
     pub fn with_raw_random_roll(mut self, seed: Option<u64>) -> Result<Self, BattleError> {
         let roll = match seed {
             Some(seed) => {
                 let mut rng = StdRng::seed_from_u64(seed);
-                rng.random_range(Self::DAMAGE_RANDOM_RAW_MIN..=Self::DAMAGE_RANDOM_RAW_MAX)
+                rng.random_range(85..=100)
             }
-            None => rand::random_range(Self::DAMAGE_RANDOM_RAW_MIN..=Self::DAMAGE_RANDOM_RAW_MAX),
+            None => rand::random_range(85..=100),
         };
 
-        self.random_percent = ((u16::from(roll) * 100) / 255) as u8;
+        self.random_percent = roll;
         Ok(self)
     }
 
@@ -329,7 +326,7 @@ impl Battle {
 
         damage = modifiers.weather.apply_to(damage)?;
         damage = modifiers.critical.apply_to(damage)?;
-        damage = (damage * u64::from(modifiers.random_percent)) / 100;
+        damage = apply_random_percent(damage, modifiers.random_percent);
 
         damage = modifiers.stab.apply_to(damage)?;
         damage = modifiers.type_effectiveness.apply_to(damage)?;
@@ -351,6 +348,10 @@ impl Battle {
             effectiveness,
         })
     }
+}
+
+fn apply_random_percent(value: u64, percent: u8) -> u64 {
+    (value * u64::from(percent) + 49) / 100
 }
 
 fn validate_move_index(pokemon: &Pokemon, move_index: usize) -> Result<(), BattleError> {
@@ -438,18 +439,24 @@ mod tests {
     }
 
     #[test]
-    fn seeded_raw_random_roll_is_reproducible() {
+    fn seeded_raw_random_roll_samples_percent_directly() {
         let first = DamageModifier::default()
-            .with_raw_random_roll(Some(42))
+            .with_raw_random_roll(Some(1))
             .unwrap()
             .random_percent;
         let second = DamageModifier::default()
-            .with_raw_random_roll(Some(42))
+            .with_raw_random_roll(Some(1))
             .unwrap()
             .random_percent;
 
         assert_eq!(first, second);
-        assert!((85..=100).contains(&first));
+        assert_eq!(first, 98);
+    }
+
+    #[test]
+    fn random_percent_rounds_to_nearest_with_ties_down() {
+        assert_eq!(apply_random_percent(10, 85), 8);
+        assert_eq!(apply_random_percent(3, 85), 3);
     }
 
     #[test]
