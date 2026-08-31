@@ -410,6 +410,10 @@ impl Pokemon {
     pub fn is_fainted(&self) -> bool {
         self.current_hp == 0
     }
+
+    pub fn has_type(&self, pokemon_type: PokemonType) -> bool {
+        self.entry.primary_type == pokemon_type || self.entry.secondary_type == Some(pokemon_type)
+    }
 }
 
 pub fn type_effectiveness_against(attack_type: PokemonType, defender: &Pokemon) -> f32 {
