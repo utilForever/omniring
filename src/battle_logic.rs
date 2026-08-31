@@ -213,11 +213,18 @@ impl Battle {
             ),
         };
 
-        let first_attack = Self::execute_move(faster, slower, faster_move_index)?;
+        let faster_move = faster.moves[faster_move_index].clone();
+        let first_attack = Self::execute_move(faster, slower, faster_move_index, false)?;
         let second_attack = if slower.is_fainted() {
             None
         } else {
-            Some(Self::execute_move(slower, faster, slower_move_index)?)
+            let faster_is_protected = is_protective_status_move(&faster_move);
+            Some(Self::execute_move(
+                slower,
+                faster,
+                slower_move_index,
+                faster_is_protected,
+            )?)
         };
 
         Ok(TurnOutcome {
@@ -230,6 +237,7 @@ impl Battle {
         attacker: &Pokemon,
         defender: &mut Pokemon,
         move_index: usize,
+        defender_is_protected: bool,
     ) -> Result<AttackOutcome, BattleError> {
         if attacker.is_fainted() {
             return Err(BattleError::FaintedPokemonCannotAttack);
@@ -240,7 +248,9 @@ impl Battle {
             .get(move_index)
             .ok_or(BattleError::InvalidMoveIndex { index: move_index })?;
 
-        if defender.is_fainted() {
+        if defender.is_fainted() || (defender_is_protected && selected_move.power > 0) {
+            // TODO: separate the logic for blocked moves and fainted defenders
+            //       as they may have different outcomes in the future.
             return Ok(AttackOutcome {
                 attacker: attacker.entry.name.to_string(),
                 defender: defender.entry.name.to_string(),
@@ -349,6 +359,11 @@ fn validate_move_index(pokemon: &Pokemon, move_index: usize) -> Result<(), Battl
         .get(move_index)
         .map(|_| ())
         .ok_or(BattleError::InvalidMoveIndex { index: move_index })
+}
+
+fn is_protective_status_move(selected_move: &Move) -> bool {
+    selected_move.category == MoveCategory::Status
+        && matches!(selected_move.name.as_str(), "Protect" | "Detect")
 }
 
 fn type_effectiveness_modifier(effectiveness: f32) -> Fraction {
@@ -528,13 +543,30 @@ mod tests {
     }
 
     #[test]
+    fn protect_blocks_the_second_damage_move() {
+        let protector = charizard();
+        let attacker = venusaur();
+        let mut battle = Battle::new(protector, attacker);
+        let outcome = battle.simulate_turn(3, 0).unwrap();
+        assert_eq!(outcome.first.move_name, "Protect");
+        assert_eq!(outcome.first.damage, 0);
+        assert!(!outcome.first.blocked);
+
+        let second = outcome.second.unwrap();
+        assert_eq!(second.move_name, "Vine Whip");
+        assert_eq!(second.damage, 0);
+        assert!(second.blocked);
+        assert_eq!(battle.p1.current_hp, battle.p1.stats.hp);
+    }
+
+    #[test]
     fn execute_move_to_fainted_defender_returns_blocked_outcome() {
         let attacker = charizard();
         let mut defender = venusaur();
 
         defender.current_hp = 0;
 
-        let outcome = Battle::execute_move(&attacker, &mut defender, 0).unwrap();
+        let outcome = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
         assert_eq!(outcome.damage, 0);
         assert!(outcome.blocked);
         assert_eq!(outcome.defender_hp_after, 0);
