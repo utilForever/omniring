@@ -264,6 +264,55 @@ mod tests {
         assert_eq!(transitions.get(), 3);
     }
 
+    #[test]
+    fn forced_replacements_do_not_consume_move_turns() {
+        let preview = TeamPreviewObservation {
+            player: roster(100),
+            opponent: roster(100),
+        };
+        let transitions = Cell::new(0);
+        let mut environment = Environment::new(preview, [0, 1, 2], |state, player, opponent| {
+            if !matches!((player, opponent), (Action::Move(_), Action::Move(_))) {
+                return Err(ActionError::WrongPhase);
+            }
+
+            transitions.set(transitions.get() + 1);
+            state.opponent.damage_active(1_000).unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+        environment
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        let first_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert!(!first_faint.terminated);
+        assert_eq!(transitions.get(), 1);
+
+        let first_replacement = environment
+            .step(Action::Move(0), Action::Switch(1))
+            .unwrap();
+        assert_eq!(first_replacement.reward, 0.0);
+        assert!(!first_replacement.terminated);
+        assert_eq!(transitions.get(), 1);
+
+        let second_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert!(!second_faint.terminated);
+
+        let second_replacement = environment
+            .step(Action::Move(0), Action::Switch(2))
+            .unwrap();
+        assert_eq!(second_replacement.reward, 0.0);
+        assert!(!second_replacement.terminated);
+        assert_eq!(transitions.get(), 2);
+
+        let final_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert!((final_faint.reward - 1.133_333_3).abs() < 1e-6);
+        assert!(final_faint.terminated);
+        assert_eq!(transitions.get(), 3);
+    }
+
     fn state(opponent_hp: [u32; 3], terminated: bool) -> BattleState {
         BattleState {
             player: team([100; 3]),
