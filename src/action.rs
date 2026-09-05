@@ -66,13 +66,7 @@ impl TeamState {
                 Ok(())
             }
             Action::Move(_) => Err(ActionError::UnavailableMove),
-            Action::Switch(slot)
-                if self.selected().get(slot).copied() == Some(true)
-                    && self.slot_active() != Some(slot)
-                    && self.roster()[slot].hp_curr() > 0 =>
-            {
-                Ok(())
-            }
+            Action::Switch(slot) if self.can_switch_to(slot) => Ok(()),
             Action::Switch(_) => Err(ActionError::InvalidSwitch),
             Action::SelectTeam(_) => Err(ActionError::WrongPhase),
         }

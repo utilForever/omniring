@@ -8,8 +8,8 @@ pub const HP_PROGRESS_REWARD: f32 = 0.1;
 /// Calculates a zero-sum reward from the player's perspective.
 ///
 /// A newly completed battle adds `WIN_REWARD` or `LOSS_REWARD` when exactly
-/// one selected team has fainted. A termination with both or neither team
-/// fainted has no outcome reward. Each newly fainted Pokemon adds or subtracts
+/// one selected team has fainted. Simultaneous terminal fainting is a draw with
+/// no outcome reward. Each newly fainted Pokemon adds or subtracts
 /// `FAINT_REWARD`, and the change in mean normalized HP across the selected
 /// team is scaled by `HP_PROGRESS_REWARD`.
 pub fn calculate_reward(previous: &BattleState, current: &BattleState) -> f32 {
@@ -19,8 +19,8 @@ pub fn calculate_reward(previous: &BattleState, current: &BattleState) -> f32 {
 
     let outcome = if current.terminated {
         match (
-            all_selected_fainted(&current.player),
-            all_selected_fainted(&current.opponent),
+            !current.player.has_available_selected(),
+            !current.opponent.has_available_selected(),
         ) {
             (false, true) => WIN_REWARD,
             (true, false) => LOSS_REWARD,
@@ -37,12 +37,6 @@ pub fn calculate_reward(previous: &BattleState, current: &BattleState) -> f32 {
         + normalized_hp(&current.player);
 
     outcome + FAINT_REWARD * faint_progress + HP_PROGRESS_REWARD * hp_progress
-}
-
-fn all_selected_fainted(team: &TeamState) -> bool {
-    (0..team.roster().len())
-        .filter(|&slot| team.selected()[slot])
-        .all(|slot| team.roster()[slot].hp_curr() == 0)
 }
 
 fn newly_fainted(previous: &TeamState, current: &TeamState) -> usize {
