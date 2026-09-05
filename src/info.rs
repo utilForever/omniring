@@ -331,7 +331,8 @@ impl Stats {
         // Stat calculation formula of HP
         // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
         let numerator =
-            (2 * u32::from(base_hp) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+            (2 * u32::from(base_hp) + 31 + (2 * u32::from(stat_points)).saturating_sub(1))
+                * u32::from(level);
         (numerator / 100 + 10 + u32::from(level)) as u16
     }
 
@@ -339,7 +340,8 @@ impl Stats {
         // Stat calculation formula of other stats (Attack, Defense, Special Attack, Special Defense, Speed)
         // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
         let numerator =
-            (2 * u32::from(base_stat) + 31 + 2 * u32::from(stat_points)) * u32::from(level);
+            (2 * u32::from(base_stat) + 31 + (2 * u32::from(stat_points)).saturating_sub(1))
+                * u32::from(level);
         (numerator / 100 + 5) as u16
     }
 
@@ -594,5 +596,12 @@ mod tests {
         // check HP goes with Stat Points (Stat Points 0 -> 32)
         let hp_with_stat_points = Stats::calculate_max_hp(78, level, 32);
         assert_eq!(hp_with_stat_points, 185);
+    }
+
+    #[test]
+    fn champions_stat_points_cost_four_evs_then_eight() {
+        assert_eq!(Stats::calculate_max_hp(78, 49, 10), 159);
+        assert_eq!(Stats::calculate_single_stat(109, 22, 10), 63);
+        assert_eq!(Stats::calculate_single_stat(109, 22, 0), 59);
     }
 }
