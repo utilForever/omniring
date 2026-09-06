@@ -85,6 +85,51 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 }
 
 #[test]
+fn second_turn_knockout_uses_persisted_hp_and_stops_the_counterattack() {
+    for player_faster in [true, false] {
+        let (player, opponent) = if player_faster {
+            (roster("Charizard"), roster("Venusaur"))
+        } else {
+            (roster("Venusaur"), roster("Charizard"))
+        };
+
+        let mut environment = Environment::from_rosters(player, opponent, [0, 1, 2]).unwrap();
+        environment
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        // Flamethrower needs two hits with these stats, regardless of the damage roll.
+        let first = battle_observation(
+            environment
+                .step(Action::Move(0), Action::Move(0))
+                .unwrap()
+                .observation,
+        );
+
+        for pokemon in [&first.player.roster()[0], &first.opponent.roster()[0]] {
+            assert!(pokemon.hp_curr() > 0 && pokemon.hp_curr() < pokemon.hp_max());
+        }
+
+        let second = battle_observation(
+            environment
+                .step(Action::Move(0), Action::Move(0))
+                .unwrap()
+                .observation,
+        );
+
+        if player_faster {
+            assert_eq!(second.opponent.roster()[0].hp_curr(), 0);
+            assert_eq!(second.opponent.slot_active(), None);
+            assert_eq!(second.player.roster(), first.player.roster());
+        } else {
+            assert_eq!(second.player.roster()[0].hp_curr(), 0);
+            assert_eq!(second.player.slot_active(), None);
+            assert_eq!(second.opponent.roster(), first.opponent.roster());
+        }
+    }
+}
+
+#[test]
 fn protect_and_switches_use_real_moves_and_preserve_benched_hp() {
     let mut environment =
         Environment::from_rosters(roster("Charizard"), roster("Venusaur"), [0, 1, 2]).unwrap();
