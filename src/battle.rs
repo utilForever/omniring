@@ -28,6 +28,7 @@ impl Battle {
         let replacement_pending = self.state.player.slot_active().is_none()
             || self.state.opponent.slot_active().is_none();
         let mut next = self.state.clone();
+
         next.player.validate_action(player_action)?;
         next.opponent.validate_action(opponent_action)?;
 
@@ -36,6 +37,7 @@ impl Battle {
                 .switch_to(slot)
                 .map_err(|_| ActionError::InvalidSwitch)?;
         }
+
         if let Action::Switch(slot) = opponent_action {
             next.opponent
                 .switch_to(slot)
@@ -48,6 +50,7 @@ impl Battle {
         {
             resolve_turn(&mut next, player_action, opponent_action)?;
         }
+
         next.terminated =
             !next.player.has_available_selected() || !next.opponent.has_available_selected();
         self.state = next;
@@ -85,6 +88,7 @@ mod tests {
                 Action::Move(2),
                 |state, player, opponent| {
                     assert_eq!((player, opponent), (Action::Move(1), Action::Move(2)));
+
                     state.opponent.damage_active(1_000).unwrap();
                     state.opponent.switch_to(1).unwrap();
                     state.opponent.damage_active(1_000).unwrap();
@@ -112,7 +116,6 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-
         assert_eq!(state.player.slot_active(), None);
         assert!(!state.terminated);
         assert_eq!(
@@ -129,7 +132,6 @@ mod tests {
                 panic!("forced replacements do not resolve moves")
             })
             .unwrap();
-
         assert_eq!(state.player.slot_active(), Some(1));
 
         let state = battle
@@ -138,7 +140,6 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-
         assert_eq!(state.opponent.roster()[0].hp_curr(), 99);
     }
 
@@ -151,7 +152,6 @@ mod tests {
                 panic!("switch-only turns have no moves to resolve")
             })
             .unwrap();
-
         assert_eq!(state.player.slot_active(), Some(1));
         assert_eq!(state.opponent.slot_active(), Some(1));
     }
@@ -196,7 +196,6 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-
         assert!(state.terminated);
         assert!(
             state.opponent.roster()[3..]

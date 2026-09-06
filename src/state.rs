@@ -116,7 +116,9 @@ impl TeamState {
     pub fn damage_active(&mut self, damage: u32) -> Result<bool, StateError> {
         let active = self.slot_active.ok_or(StateError::InvalidActiveSlot)?;
         let pokemon = &mut self.roster[active];
+
         pokemon.hp_curr = pokemon.hp_curr.saturating_sub(damage);
+
         let fainted = pokemon.hp_curr == 0;
 
         if fainted {
@@ -302,7 +304,6 @@ mod tests {
             Some(0),
         )
         .unwrap();
-
         assert_eq!(team.damage_active(150), Ok(true));
         assert_eq!(team.roster()[0].hp_curr(), 0);
         assert_eq!(team.slot_active(), None);
@@ -312,9 +313,9 @@ mod tests {
     fn switching_activates_only_a_selected_non_fainted_reserve() {
         let mut roster = roster(100);
         roster[1] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
         let mut team =
             TeamState::new(roster, [true, true, true, false, false, false], None).unwrap();
-
         assert_eq!(team.switch_to(1), Err(StateError::InvalidActiveSlot));
         assert_eq!(team.switch_to(3), Err(StateError::InvalidActiveSlot));
         assert_eq!(team.switch_to(2), Ok(()));
@@ -329,7 +330,6 @@ mod tests {
             Some(0),
         )
         .unwrap();
-
         assert_eq!(
             OpponentObservation::new(&team, [false; 6]),
             Err(StateError::InvalidActiveSlot)
