@@ -164,6 +164,41 @@ fn failed_core_turn_leaves_hp_unchanged_for_the_next_step() {
 }
 
 #[test]
+fn reveals_an_opponent_that_faints_on_switch_in() {
+    let mut opponent = roster("Venusaur");
+    opponent[1].current_hp = 1;
+
+    let replacement_hp = u32::from(opponent[2].current_hp);
+
+    let mut environment =
+        Environment::from_rosters(roster("Charizard"), opponent, [0, 1, 2]).unwrap();
+    environment
+        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .unwrap();
+
+    let outcome = environment
+        .step(Action::Move(0), Action::Switch(1))
+        .unwrap();
+    assert!(!outcome.terminated);
+
+    let observation = battle_observation(outcome.observation);
+    assert_eq!(observation.opponent.roster()[1].hp_curr(), 0);
+    assert_eq!(observation.opponent.slot_active(), None);
+    assert_eq!(
+        observation.opponent.selection_revealed(),
+        &[true, true, false, false, false, false]
+    );
+
+    let replacement = environment
+        .step(Action::Move(0), Action::Switch(2))
+        .unwrap();
+    assert_eq!(replacement.reward, 0.0);
+
+    let observation = battle_observation(replacement.observation);
+    assert_eq!(observation.opponent.roster()[2].hp_curr(), replacement_hp);
+}
+
+#[test]
 fn rejects_invalid_hp_in_either_roster() {
     for invalid_player in [true, false] {
         for (hp, max_hp) in [(0, 0), (101, 100)] {

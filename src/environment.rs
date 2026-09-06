@@ -195,6 +195,11 @@ where
             let battle = self.battle.as_mut().unwrap();
             let state = battle.play_turn(action, opponent_action, &mut self.transition)?;
 
+            // A successful switch reveals its slot even if the incoming Pokemon fainted.
+            if let Action::Switch(slot) = opponent_action {
+                self.opponent_revealed[slot] = true;
+            }
+
             if let Some(active) = state.opponent.slot_active() {
                 self.opponent_revealed[active] = true;
             }
