@@ -327,40 +327,31 @@ impl Move {
 }
 
 impl Stats {
-    pub fn calculate_max_hp(base_hp: u16, level: u8, stat_points: u8) -> u16 {
-        // Stat calculation formula of HP
-        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
-        let numerator =
-            (2 * u32::from(base_hp) + 31 + (2 * u32::from(stat_points)).saturating_sub(1))
-                * u32::from(level);
-        (numerator / 100 + 10 + u32::from(level)) as u16
+    pub fn calculate_max_hp(base_hp: u16, stat_points: u8) -> u16 {
+        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat_point#Calculation
+        base_hp + u16::from(stat_points) + 75
     }
 
-    pub fn calculate_single_stat(base_stat: u16, level: u8, stat_points: u8) -> u16 {
-        // Stat calculation formula of other stats (Attack, Defense, Special Attack, Special Defense, Speed)
-        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat#Pok%C3%A9mon_Champions
-        let numerator =
-            (2 * u32::from(base_stat) + 31 + (2 * u32::from(stat_points)).saturating_sub(1))
-                * u32::from(level);
-        (numerator / 100 + 5) as u16
+    pub fn calculate_single_stat(base_stat: u16, stat_points: u8) -> u16 {
+        // Alignment is applied by `apply_nature` after this calculation.
+        // Reference: https://bulbapedia.bulbagarden.net/wiki/Stat_point#Calculation
+        base_stat + u16::from(stat_points) + 20
     }
 
-    pub fn calculate(&self, level: u8, stat_points: StatPoints, nature: Nature) -> Self {
+    pub fn calculate(&self, stat_points: StatPoints, nature: Nature) -> Self {
         let raw_stats = Self {
-            hp: Self::calculate_max_hp(self.hp, level, stat_points.hp),
-            attack: Self::calculate_single_stat(self.attack, level, stat_points.attack),
-            defense: Self::calculate_single_stat(self.defense, level, stat_points.defense),
+            hp: Self::calculate_max_hp(self.hp, stat_points.hp),
+            attack: Self::calculate_single_stat(self.attack, stat_points.attack),
+            defense: Self::calculate_single_stat(self.defense, stat_points.defense),
             special_attack: Self::calculate_single_stat(
                 self.special_attack,
-                level,
                 stat_points.special_attack,
             ),
             special_defense: Self::calculate_single_stat(
                 self.special_defense,
-                level,
                 stat_points.special_defense,
             ),
-            speed: Self::calculate_single_stat(self.speed, level, stat_points.speed),
+            speed: Self::calculate_single_stat(self.speed, stat_points.speed),
         };
         raw_stats.apply_nature(nature)
     }
@@ -388,7 +379,7 @@ impl Pokemon {
             return Err(BattleError::InvalidStatPoints);
         }
 
-        let stats = entry.base_stats.calculate(level, stat_points, nature);
+        let stats = entry.base_stats.calculate(stat_points, nature);
         let max_hp = stats.hp;
         let can_mega_evolve = item
             .as_ref()
@@ -585,23 +576,37 @@ mod tests {
 
     #[test]
     fn hp_calculation_reflects_base_hp_and_stat_points() {
-        let level = 50;
-
-        let hp_low_base = Stats::calculate_max_hp(60, level, 0);
+        let hp_low_base = Stats::calculate_max_hp(60, 0);
         assert_eq!(hp_low_base, 135);
 
-        let hp_high_base = Stats::calculate_max_hp(78, level, 0);
+        let hp_high_base = Stats::calculate_max_hp(78, 0);
         assert_eq!(hp_high_base, 153);
 
         // check HP goes with Stat Points (Stat Points 0 -> 32)
-        let hp_with_stat_points = Stats::calculate_max_hp(78, level, 32);
+        let hp_with_stat_points = Stats::calculate_max_hp(78, 32);
         assert_eq!(hp_with_stat_points, 185);
     }
 
     #[test]
-    fn champions_stat_points_cost_four_evs_then_eight() {
-        assert_eq!(Stats::calculate_max_hp(78, 49, 10), 159);
-        assert_eq!(Stats::calculate_single_stat(109, 22, 10), 63);
-        assert_eq!(Stats::calculate_single_stat(109, 22, 0), 59);
+    fn champions_stats_follow_the_stat_point_formula_at_any_level() {
+        let charizard = Pokemon::new(
+            find_pokemon("Charizard").unwrap(),
+            22,
+            StatPoints {
+                hp: 10,
+                attack: 10,
+                defense: 10,
+                special_attack: 10,
+                special_defense: 10,
+                speed: 10,
+            },
+            Nature::Hardy,
+            None,
+            [tackle(), tackle(), tackle(), tackle()],
+        )
+        .unwrap();
+
+        assert_eq!(charizard.stats.hp, 163);
+        assert_eq!(charizard.stats.special_attack, 139);
     }
 }
