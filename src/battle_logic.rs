@@ -103,7 +103,7 @@ pub struct DamageResult {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct AttackOutcome {
+pub struct Attackresult {
     pub attacker: String,
     pub defender: String,
     pub move_name: String,
@@ -114,9 +114,9 @@ pub struct AttackOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TurnOutcome {
-    pub first: AttackOutcome,
-    pub second: Option<AttackOutcome>,
+pub struct Turnresult {
+    pub first: Attackresult,
+    pub second: Option<Attackresult>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,17 +145,17 @@ impl Battle {
         &mut self,
         first_move_index: usize,
         second_move_index: usize,
-    ) -> Result<TurnOutcome, BattleError> {
+    ) -> Result<Turnresult, BattleError> {
         if self.p1.is_fainted() || self.p2.is_fainted() {
             return Err(BattleError::FaintedPokemonCannotBattle);
         }
 
         let order = self.determine_turn_order(first_move_index, second_move_index)?;
 
-        let outcome = self.resolve_turn_order(first_move_index, second_move_index, order)?;
+        let result = self.resolve_turn_order(first_move_index, second_move_index, order)?;
 
         self.turn_count += 1;
-        Ok(outcome)
+        Ok(result)
     }
 
     pub fn determine_turn_order(
@@ -194,7 +194,7 @@ impl Battle {
         faster_move_index: usize,
         slower_move_index: usize,
         order: TurnOrder,
-    ) -> Result<TurnOutcome, BattleError> {
+    ) -> Result<Turnresult, BattleError> {
         let (faster, slower, faster_move_index, slower_move_index) = match order {
             TurnOrder::FirstPokemon => (
                 &mut self.p1,
@@ -224,7 +224,7 @@ impl Battle {
             )?)
         };
 
-        Ok(TurnOutcome {
+        Ok(Turnresult {
             first: first_attack,
             second: second_attack,
         })
@@ -235,7 +235,7 @@ impl Battle {
         defender: &mut Pokemon,
         move_index: usize,
         defender_is_protected: bool,
-    ) -> Result<AttackOutcome, BattleError> {
+    ) -> Result<Attackresult, BattleError> {
         if attacker.is_fainted() {
             return Err(BattleError::FaintedPokemonCannotAttack);
         }
@@ -247,8 +247,8 @@ impl Battle {
 
         if defender.is_fainted() || (defender_is_protected && selected_move.power > 0) {
             // TODO: separate the logic for blocked moves and fainted defenders
-            //       as they may have different outcomes in the future.
-            return Ok(AttackOutcome {
+            //       as they may have different results in the future.
+            return Ok(Attackresult {
                 attacker: attacker.entry.name.to_string(),
                 defender: defender.entry.name.to_string(),
                 move_name: selected_move.name.clone(),
@@ -263,7 +263,7 @@ impl Battle {
 
         defender.current_hp = defender.current_hp.saturating_sub(damage_result.damage);
 
-        Ok(AttackOutcome {
+        Ok(Attackresult {
             attacker: attacker.entry.name.to_string(),
             defender: defender.entry.name.to_string(),
             move_name: selected_move.name.clone(),
@@ -335,13 +335,12 @@ impl Battle {
         // explicit calculation stages above, such as screens, abilities, and items.
         damage = modifiers.other.apply_to(damage)?;
 
-        let damage = if damage == 0 {
+        let effectiveness = type_effectiveness_against(selected_move.r#type, defender);
+        let damage = if effectiveness == 0.0 {
             0
         } else {
             damage.max(1).min(u64::from(u16::MAX)) as u16
         };
-
-        let effectiveness = type_effectiveness_against(selected_move.r#type, defender);
 
         Ok(DamageResult {
             damage,
@@ -351,7 +350,7 @@ impl Battle {
 }
 
 fn apply_random_percent(value: u64, percent: u8) -> u64 {
-    (value * u64::from(percent) + 49) / 100
+    (value * u64::from(percent)) / 100
 }
 
 fn validate_move_index(pokemon: &Pokemon, move_index: usize) -> Result<(), BattleError> {
@@ -386,8 +385,8 @@ fn type_effectiveness_modifier(effectiveness: f32) -> Fraction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::info::{Nature, StatPoints};
-    use crate::pokedex::build_pokemon_from_pokedex;
+    use crate::info::{Nature, PokemonType, StatPoints};
+    use crate::pokedex::{build_pokemon_from_pokedex, find_pokemon};
 
     fn valid_stat_points() -> StatPoints {
         StatPoints {
@@ -438,6 +437,27 @@ mod tests {
         .unwrap()
     }
 
+    fn pokemon(species: &str) -> Pokemon {
+        Pokemon::new(
+            find_pokemon(species).unwrap(),
+            50,
+            valid_stat_points(),
+            Nature::Hardy,
+            None,
+            std::array::from_fn(|_| {
+                Move::new(
+                    "Test Move",
+                    PokemonType::Normal,
+                    MoveCategory::Status,
+                    0,
+                    None,
+                    0,
+                )
+            }),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn seeded_raw_random_roll_samples_percent_directly() {
         let first = DamageModifier::default()
@@ -454,9 +474,91 @@ mod tests {
     }
 
     #[test]
-    fn random_percent_rounds_to_nearest_with_ties_down() {
+    fn random_percent_truncates_fractional_damage() {
         assert_eq!(apply_random_percent(10, 85), 8);
-        assert_eq!(apply_random_percent(3, 85), 3);
+        assert_eq!(apply_random_percent(3, 85), 2);
+    }
+
+    #[test]
+    fn damage_applies_stab_and_type_effectiveness() {
+        let attacker = charizard();
+        let cases = [
+            ("neutral", PokemonType::Dragon, pokemon("Venusaur"), 38, 1.0),
+            ("stab", PokemonType::Flying, pokemon("Gengar"), 70, 1.0),
+            ("resisted", PokemonType::Fire, pokemon("Dragonite"), 28, 0.5),
+            (
+                "super-effective",
+                PokemonType::Fire,
+                pokemon("Venusaur"),
+                114,
+                2.0,
+            ),
+            (
+                "dual-type",
+                PokemonType::Ice,
+                pokemon("Dragonite"),
+                152,
+                4.0,
+            ),
+            ("immune", PokemonType::Normal, pokemon("Gengar"), 0, 0.0),
+        ];
+
+        for (case, move_type, defender, expected_damage, expected_effectiveness) in cases {
+            let selected_move = Move::new(
+                "Test Move",
+                move_type,
+                MoveCategory::Special,
+                80,
+                Some(100),
+                0,
+            );
+
+            let result =
+                Battle::calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
+            assert_eq!(result.damage, expected_damage, "{case}");
+            assert_eq!(result.effectiveness, expected_effectiveness, "{case}");
+        }
+    }
+
+    #[test]
+    fn non_immune_moves_deal_at_least_one_damage() {
+        let attacker = pokemon("Venusaur");
+        let defender = pokemon("Charizard");
+        let selected_move = Move::new(
+            "Test Move",
+            PokemonType::Grass,
+            MoveCategory::Special,
+            1,
+            Some(100),
+            0,
+        );
+
+        let result =
+            Battle::calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
+        assert_eq!(result.damage, 1);
+        assert_eq!(result.effectiveness, 0.25);
+    }
+
+    #[test]
+    fn immune_move_result_reports_zero_effectiveness() {
+        let mut attacker = charizard();
+        let mut defender = pokemon("Gengar");
+        let hp_before = defender.current_hp;
+
+        attacker.moves[0] = Move::new(
+            "Test Move",
+            PokemonType::Normal,
+            MoveCategory::Special,
+            80,
+            Some(100),
+            0,
+        );
+
+        let result = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
+        assert_eq!(result.damage, 0);
+        assert_eq!(result.effectiveness, 0.0);
+        assert_eq!(result.defender_hp_after, hp_before);
+        assert!(!result.blocked);
     }
 
     #[test]
@@ -466,10 +568,9 @@ mod tests {
 
         let mut battle = Battle::new(slower.clone(), faster.clone());
         let order = battle.determine_turn_order(0, 0).unwrap();
-        let outcome = battle.simulate_turn(0, 0).unwrap();
-
+        let result = battle.simulate_turn(0, 0).unwrap();
         assert_eq!(order, TurnOrder::FirstPokemon);
-        assert_eq!(outcome.first.attacker, "Dragonite");
+        assert_eq!(result.first.attacker, "Dragonite");
     }
 
     #[test]
@@ -478,12 +579,10 @@ mod tests {
         let faster = charizard();
 
         let mut battle = Battle::new(slower.clone(), faster.clone());
-
         let order = battle.determine_turn_order(0, 3).unwrap();
-        let outcome = battle.simulate_turn(0, 3).unwrap();
-
+        let result = battle.simulate_turn(0, 3).unwrap();
         assert_eq!(order, TurnOrder::SecondPokemon);
-        assert_eq!(outcome.first.attacker, "Charizard");
+        assert_eq!(result.first.attacker, "Charizard");
     }
 
     #[test]
@@ -492,12 +591,10 @@ mod tests {
         let faster = dragonite();
 
         let mut battle = Battle::new(slower.clone(), faster.clone());
-
         let order = battle.determine_turn_order(0, 3).unwrap();
-        let outcome = battle.simulate_turn(0, 3).unwrap();
-
+        let result = battle.simulate_turn(0, 3).unwrap();
         assert_eq!(order, TurnOrder::FirstPokemon);
-        assert_eq!(outcome.first.attacker, "Venusaur");
+        assert_eq!(result.first.attacker, "Venusaur");
     }
 
     #[test]
@@ -508,10 +605,9 @@ mod tests {
         let mut battle = Battle::new(attacker.clone(), defender.clone());
         battle.p2.current_hp = 10;
 
-        let outcome = battle.simulate_turn(0, 0).unwrap();
-
-        assert_eq!(outcome.first.attacker, "Charizard");
-        assert!(outcome.second.is_none());
+        let result = battle.simulate_turn(0, 0).unwrap();
+        assert_eq!(result.first.attacker, "Charizard");
+        assert!(result.second.is_none());
     }
 
     #[test]
@@ -520,9 +616,8 @@ mod tests {
         let faster = charizard();
 
         let mut battle = Battle::new(slower.clone(), faster.clone());
-        let outcome = battle.simulate_turn(1, 0).unwrap();
-
-        assert_eq!(outcome.first.attacker, "Charizard");
+        let result = battle.simulate_turn(1, 0).unwrap();
+        assert_eq!(result.first.attacker, "Charizard");
     }
 
     #[test]
@@ -532,7 +627,6 @@ mod tests {
 
         let mut battle = Battle::new(attacker.clone(), defender.clone());
         let result = Battle::simulate_turn(&mut battle, 4, 0);
-
         assert_eq!(result, Err(BattleError::InvalidMoveIndex { index: 4 }));
     }
 
@@ -545,7 +639,6 @@ mod tests {
         battle.p1.current_hp = 0;
 
         let result = Battle::simulate_turn(&mut battle, 0, 0);
-
         assert_eq!(result, Err(BattleError::FaintedPokemonCannotBattle));
     }
 
@@ -554,12 +647,12 @@ mod tests {
         let protector = charizard();
         let attacker = venusaur();
         let mut battle = Battle::new(protector, attacker);
-        let outcome = battle.simulate_turn(3, 0).unwrap();
-        assert_eq!(outcome.first.move_name, "Protect");
-        assert_eq!(outcome.first.damage, 0);
-        assert!(!outcome.first.blocked);
+        let result = battle.simulate_turn(3, 0).unwrap();
+        assert_eq!(result.first.move_name, "Protect");
+        assert_eq!(result.first.damage, 0);
+        assert!(!result.first.blocked);
 
-        let second = outcome.second.unwrap();
+        let second = result.second.unwrap();
         assert_eq!(second.move_name, "Vine Whip");
         assert_eq!(second.damage, 0);
         assert!(second.blocked);
@@ -567,15 +660,15 @@ mod tests {
     }
 
     #[test]
-    fn execute_move_to_fainted_defender_returns_blocked_outcome() {
+    fn execute_move_to_fainted_defender_returns_blocked_result() {
         let attacker = charizard();
         let mut defender = venusaur();
 
         defender.current_hp = 0;
 
-        let outcome = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
-        assert_eq!(outcome.damage, 0);
-        assert!(outcome.blocked);
-        assert_eq!(outcome.defender_hp_after, 0);
+        let result = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
+        assert_eq!(result.damage, 0);
+        assert!(result.blocked);
+        assert_eq!(result.defender_hp_after, 0);
     }
 }

@@ -112,6 +112,43 @@ impl TeamState {
     pub fn slot_active(&self) -> Option<usize> {
         self.slot_active
     }
+
+    pub fn damage_active(&mut self, damage: u32) -> Result<bool, StateError> {
+        let active = self.slot_active.ok_or(StateError::InvalidActiveSlot)?;
+        let pokemon = &mut self.roster[active];
+
+        pokemon.hp_curr = pokemon.hp_curr.saturating_sub(damage);
+
+        let fainted = pokemon.hp_curr == 0;
+
+        if fainted {
+            self.slot_active = None;
+        }
+
+        Ok(fainted)
+    }
+
+    pub fn switch_to(&mut self, slot: usize) -> Result<(), StateError> {
+        if !self.can_switch_to(slot) {
+            return Err(StateError::InvalidActiveSlot);
+        }
+
+        self.slot_active = Some(slot);
+        Ok(())
+    }
+
+    pub(crate) fn can_switch_to(&self, slot: usize) -> bool {
+        self.selected.get(slot) == Some(&true)
+            && self.slot_active != Some(slot)
+            && self.roster[slot].hp_curr > 0
+    }
+
+    pub(crate) fn has_available_selected(&self) -> bool {
+        self.roster
+            .iter()
+            .zip(self.selected)
+            .any(|(pokemon, selected)| selected && pokemon.hp_curr > 0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -260,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn damage_to_active_clamps_hp_and_requires_replacement_after_fainting() {
+        let mut team = TeamState::new(
+            roster(100),
+            [true, true, true, false, false, false],
+            Some(0),
+        )
+        .unwrap();
+        assert_eq!(team.damage_active(150), Ok(true));
+        assert_eq!(team.roster()[0].hp_curr(), 0);
+        assert_eq!(team.slot_active(), None);
+    }
+
+    #[test]
+    fn switching_activates_only_a_selected_non_fainted_reserve() {
+        let mut roster = roster(100);
+        roster[1] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let mut team =
+            TeamState::new(roster, [true, true, true, false, false, false], None).unwrap();
+        assert_eq!(team.switch_to(1), Err(StateError::InvalidActiveSlot));
+        assert_eq!(team.switch_to(3), Err(StateError::InvalidActiveSlot));
+        assert_eq!(team.switch_to(2), Ok(()));
+        assert_eq!(team.slot_active(), Some(2));
+    }
+
+    #[test]
     fn rejects_invalid_opponent_observation() {
         let team = TeamState::new(
             roster(100),
@@ -267,7 +330,6 @@ mod tests {
             Some(0),
         )
         .unwrap();
-
         assert_eq!(
             OpponentObservation::new(&team, [false; 6]),
             Err(StateError::InvalidActiveSlot)
