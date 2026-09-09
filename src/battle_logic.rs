@@ -125,6 +125,14 @@ pub enum TurnOrder {
     SecondPokemon,
 }
 
+/// The outcome of resolving a turn against caller-owned runtime HP.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeTurnResult {
+    pub turn: Turnresult,
+    pub first_hp_after: u16,
+    pub second_hp_after: u16,
+}
+
 pub struct Battle {
     pub p1: Pokemon,
     pub p2: Pokemon,
@@ -146,97 +154,113 @@ impl Battle {
         first_move_index: usize,
         second_move_index: usize,
     ) -> Result<Turnresult, BattleError> {
-        if self.p1.is_fainted() || self.p2.is_fainted() {
-            return Err(BattleError::FaintedPokemonCannotBattle);
-        }
+        let result = self.resolve_turn(
+            self.p1.current_hp,
+            first_move_index,
+            self.p2.current_hp,
+            second_move_index,
+        )?;
 
-        let order = self.determine_turn_order(first_move_index, second_move_index)?;
-
-        let result = self.resolve_turn_order(first_move_index, second_move_index, order)?;
-
+        self.p1.current_hp = result.first_hp_after;
+        self.p2.current_hp = result.second_hp_after;
         self.turn_count += 1;
-        Ok(result)
+        Ok(result.turn)
     }
 
     pub fn determine_turn_order(
-        &mut self,
+        &self,
         first_move_index: usize,
         second_move_index: usize,
     ) -> Result<TurnOrder, BattleError> {
-        let first_pokemon = &mut self.p1;
-        let second_pokemon = &mut self.p2;
+        validate_move_index(&self.p1, first_move_index)?;
+        validate_move_index(&self.p2, second_move_index)?;
 
-        validate_move_index(first_pokemon, first_move_index)?;
-        validate_move_index(second_pokemon, second_move_index)?;
-
-        let first_move = &first_pokemon.moves[first_move_index];
-        let second_move = &second_pokemon.moves[second_move_index];
+        let first_move = &self.p1.moves[first_move_index];
+        let second_move = &self.p2.moves[second_move_index];
 
         if first_move.priority > second_move.priority {
             Ok(TurnOrder::FirstPokemon)
         } else if first_move.priority < second_move.priority {
             Ok(TurnOrder::SecondPokemon)
-        } else if first_pokemon.stats.speed > second_pokemon.stats.speed {
+        } else if self.p1.stats.speed > self.p2.stats.speed {
             Ok(TurnOrder::FirstPokemon)
-        } else if first_pokemon.stats.speed < second_pokemon.stats.speed {
+        } else if self.p1.stats.speed < self.p2.stats.speed {
             Ok(TurnOrder::SecondPokemon)
         } else {
-            let turn_order = match rand::random() {
+            Ok(match rand::random() {
                 true => TurnOrder::FirstPokemon,
                 false => TurnOrder::SecondPokemon,
-            };
-            Ok(turn_order)
+            })
         }
     }
 
-    fn resolve_turn_order(
-        &mut self,
-        faster_move_index: usize,
-        slower_move_index: usize,
-        order: TurnOrder,
-    ) -> Result<Turnresult, BattleError> {
+    /// Resolves a turn using caller-owned HP rather than mutating `Pokemon`.
+    pub fn resolve_turn(
+        &self,
+        first_hp: u16,
+        first_move_index: usize,
+        second_hp: u16,
+        second_move_index: usize,
+    ) -> Result<RuntimeTurnResult, BattleError> {
+        if first_hp == 0 || second_hp == 0 {
+            return Err(BattleError::FaintedPokemonCannotBattle);
+        }
+
+        let order = self.determine_turn_order(first_move_index, second_move_index)?;
+        let mut first_hp_after = first_hp;
+        let mut second_hp_after = second_hp;
+
         let (faster, slower, faster_move_index, slower_move_index) = match order {
-            TurnOrder::FirstPokemon => (
-                &mut self.p1,
-                &mut self.p2,
-                faster_move_index,
-                slower_move_index,
-            ),
-            TurnOrder::SecondPokemon => (
-                &mut self.p2,
-                &mut self.p1,
-                slower_move_index,
-                faster_move_index,
-            ),
+            TurnOrder::FirstPokemon => (&self.p1, &self.p2, first_move_index, second_move_index),
+            TurnOrder::SecondPokemon => (&self.p2, &self.p1, second_move_index, first_move_index),
         };
 
         let faster_move = faster.moves[faster_move_index].clone();
-        let first_attack = Self::execute_move(faster, slower, faster_move_index, false)?;
-        let second_attack = if slower.is_fainted() {
+        let (faster_hp, slower_hp) = match order {
+            TurnOrder::FirstPokemon => (&mut first_hp_after, &mut second_hp_after),
+            TurnOrder::SecondPokemon => (&mut second_hp_after, &mut first_hp_after),
+        };
+        let first_attack = Self::execute_move(
+            faster,
+            *faster_hp,
+            slower,
+            slower_hp,
+            faster_move_index,
+            false,
+        )?;
+        let second_attack = if *slower_hp == 0 {
             None
         } else {
             let faster_is_protected = is_protective_status_move(&faster_move);
             Some(Self::execute_move(
                 slower,
+                *slower_hp,
                 faster,
+                faster_hp,
                 slower_move_index,
                 faster_is_protected,
             )?)
         };
 
-        Ok(Turnresult {
-            first: first_attack,
-            second: second_attack,
+        Ok(RuntimeTurnResult {
+            turn: Turnresult {
+                first: first_attack,
+                second: second_attack,
+            },
+            first_hp_after,
+            second_hp_after,
         })
     }
 
     pub fn execute_move(
         attacker: &Pokemon,
-        defender: &mut Pokemon,
+        attacker_hp: u16,
+        defender: &Pokemon,
+        defender_hp: &mut u16,
         move_index: usize,
         defender_is_protected: bool,
     ) -> Result<Attackresult, BattleError> {
-        if attacker.is_fainted() {
+        if attacker_hp == 0 {
             return Err(BattleError::FaintedPokemonCannotAttack);
         }
 
@@ -245,7 +269,7 @@ impl Battle {
             .get(move_index)
             .ok_or(BattleError::InvalidMoveIndex { index: move_index })?;
 
-        if defender.is_fainted() || (defender_is_protected && selected_move.power > 0) {
+        if *defender_hp == 0 || (defender_is_protected && selected_move.power > 0) {
             // TODO: separate the logic for blocked moves and fainted defenders
             //       as they may have different results in the future.
             return Ok(Attackresult {
@@ -255,13 +279,12 @@ impl Battle {
                 damage: 0,
                 effectiveness: 1.0,
                 blocked: true,
-                defender_hp_after: defender.current_hp,
+                defender_hp_after: *defender_hp,
             });
         }
 
         let damage_result = Self::calculate_damage(attacker, defender, selected_move, None)?;
-
-        defender.current_hp = defender.current_hp.saturating_sub(damage_result.damage);
+        *defender_hp = defender_hp.saturating_sub(damage_result.damage);
 
         Ok(Attackresult {
             attacker: attacker.entry.name.to_string(),
@@ -270,7 +293,7 @@ impl Battle {
             damage: damage_result.damage,
             effectiveness: damage_result.effectiveness,
             blocked: false,
-            defender_hp_after: defender.current_hp,
+            defender_hp_after: *defender_hp,
         })
     }
 
@@ -542,7 +565,7 @@ mod tests {
     #[test]
     fn immune_move_result_reports_zero_effectiveness() {
         let mut attacker = charizard();
-        let mut defender = pokemon("Gengar");
+        let defender = pokemon("Gengar");
         let hp_before = defender.current_hp;
 
         attacker.moves[0] = Move::new(
@@ -554,7 +577,16 @@ mod tests {
             0,
         );
 
-        let result = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
+        let mut defender_hp = defender.current_hp;
+        let result = Battle::execute_move(
+            &attacker,
+            attacker.current_hp,
+            &defender,
+            &mut defender_hp,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.damage, 0);
         assert_eq!(result.effectiveness, 0.0);
         assert_eq!(result.defender_hp_after, hp_before);
@@ -611,6 +643,37 @@ mod tests {
     }
 
     #[test]
+    fn resolves_against_caller_owned_hp_without_mutating_pokemon() {
+        let mut attacker = charizard();
+        let mut defender = venusaur();
+        attacker.current_hp = 1;
+        defender.current_hp = 1;
+
+        let battle = Battle::new(attacker, defender);
+        let result = battle.resolve_turn(100, 0, 10, 0).unwrap();
+
+        assert_eq!(result.turn.first.attacker, "Charizard");
+        assert!(result.turn.second.is_none());
+        assert_eq!(result.first_hp_after, 100);
+        assert_eq!(result.second_hp_after, 0);
+        assert_eq!(battle.p1.current_hp, 1);
+        assert_eq!(battle.p2.current_hp, 1);
+    }
+
+    #[test]
+    fn runtime_turn_rejects_a_fainted_caller_owned_combatant() {
+        let attacker = charizard();
+        let defender = venusaur();
+
+        let battle = Battle::new(attacker, defender.clone());
+
+        assert_eq!(
+            battle.resolve_turn(0, 0, defender.current_hp, 0),
+            Err(BattleError::FaintedPokemonCannotBattle)
+        );
+    }
+
+    #[test]
     fn second_input_can_act_first_when_it_is_faster() {
         let slower = venusaur();
         let faster = charizard();
@@ -662,11 +725,18 @@ mod tests {
     #[test]
     fn execute_move_to_fainted_defender_returns_blocked_result() {
         let attacker = charizard();
-        let mut defender = venusaur();
+        let defender = venusaur();
+        let mut defender_hp = 0;
 
-        defender.current_hp = 0;
-
-        let result = Battle::execute_move(&attacker, &mut defender, 0, false).unwrap();
+        let result = Battle::execute_move(
+            &attacker,
+            attacker.current_hp,
+            &defender,
+            &mut defender_hp,
+            0,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.damage, 0);
         assert!(result.blocked);
         assert_eq!(result.defender_hp_after, 0);
