@@ -55,6 +55,21 @@ fn real_battles_run_to_win_or_loss_and_reset() {
                 assert_eq!(observation.opponent.roster(), initial.opponent.roster());
             }
 
+            let (losing_roster, selection) = if player_wins {
+                (observation.opponent.roster(), [5, 2, 0])
+            } else {
+                (observation.player.roster(), [4, 1, 3])
+            };
+
+            for (slot, pokemon) in losing_roster.iter().enumerate() {
+                let expected_hp = if selection[..=turn].contains(&slot) {
+                    0
+                } else {
+                    1
+                };
+                assert_eq!(pokemon.hp_curr(), expected_hp, "turn {turn}, slot {slot}");
+            }
+
             if turn < 2 {
                 assert_eq!(
                     environment.step(Action::Move(0), Action::Move(0)),
@@ -70,6 +85,11 @@ fn real_battles_run_to_win_or_loss_and_reset() {
                 let replacement = environment.step(action, opponent_action).unwrap();
                 assert_eq!(replacement.reward, 0.0);
                 assert!(!replacement.terminated);
+
+                let replaced = battle_observation(replacement.observation);
+                assert!(!replaced.terminated);
+                assert_eq!(replaced.player.roster(), observation.player.roster());
+                assert_eq!(replaced.opponent.roster(), observation.opponent.roster());
             }
         }
 
