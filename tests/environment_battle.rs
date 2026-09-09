@@ -19,12 +19,16 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 
         let mut environment = Environment::from_rosters(player, opponent, [5, 2, 0]).unwrap();
         let preview = environment.reset();
+        assert!(matches!(preview, Observation::TeamPreview(_)));
+
         let selected = environment
             .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
             .unwrap();
         assert_eq!(selected.reward, 0.0);
+        assert!(!selected.terminated);
 
         let initial = battle_observation(selected.observation);
+        assert!(!initial.terminated);
         assert_eq!(initial.player.slot_active(), Some(4));
         assert_eq!(initial.opponent.slot_active(), Some(5));
         assert_eq!(
@@ -79,6 +83,8 @@ fn real_battles_run_to_win_or_loss_and_reset() {
         let restarted = environment
             .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
             .unwrap();
+        assert_eq!(restarted.reward, 0.0);
+        assert!(!restarted.terminated);
         assert_eq!(battle_observation(restarted.observation), initial);
         assert!(environment.step(Action::Move(0), Action::Move(0)).is_ok());
     }
