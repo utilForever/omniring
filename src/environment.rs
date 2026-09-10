@@ -1,5 +1,5 @@
 use crate::battle_logic::Battle as CoreBattle;
-use crate::info::Pokemon;
+use crate::info::{Pokemon, validate_move_count};
 use crate::{
     Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
     TeamPreviewObservation, TeamState, calculate_reward,
@@ -29,7 +29,7 @@ pub struct StepOutcome {
 }
 
 impl Environment<()> {
-    /// Creates an environment using the core battle logic and four moves per Pokemon.
+    /// Creates an environment using the core battle logic and one to four moves per Pokemon.
     /// Roster slots are preserved; the first selected slot is each side's lead.
     /// `reset` restores the supplied HP and returns to team preview.
     ///
@@ -107,10 +107,12 @@ impl Environment<()> {
 
 fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionError> {
     let [a, b, c, d, e, f] = roster.each_ref().map(|pokemon| {
+        validate_move_count(pokemon.moves.len()).map_err(ActionError::Battle)?;
+
         PokemonState::new(
             u32::from(pokemon.current_hp),
             u32::from(pokemon.stats.hp),
-            [true; 4],
+            std::array::from_fn(|slot| slot < pokemon.moves.len()),
         )
         .map_err(ActionError::InvalidState)
     });

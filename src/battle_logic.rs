@@ -444,7 +444,7 @@ mod tests {
             valid_stat_points(),
             Nature::Hardy,
             None,
-            std::array::from_fn(|_| {
+            std::array::from_fn::<_, 4, _>(|_| {
                 Move::new(
                     "Test Move",
                     PokemonType::Normal,

@@ -239,7 +239,8 @@ pub struct Pokemon {
     pub nature: Nature,
     pub ability: Option<String>,
     pub item: Option<HeldItem>,
-    pub moves: [Move; 4],
+    /// One to four equipped moves, in action-slot order.
+    pub moves: Vec<Move>,
 
     pub current_hp: u16,
     pub can_mega_evolve: bool,
@@ -248,6 +249,7 @@ pub struct Pokemon {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleError {
+    InvalidMoveCount { count: usize },
     InvalidMoveIndex { index: usize },
     LevelExceedsCap { level: u8, cap: u8 },
     InvalidStatPoints,
@@ -357,14 +359,23 @@ impl Stats {
     }
 }
 
+pub(crate) fn validate_move_count(count: usize) -> Result<(), BattleError> {
+    if !(1..=4).contains(&count) {
+        return Err(BattleError::InvalidMoveCount { count });
+    }
+
+    Ok(())
+}
+
 impl Pokemon {
+    /// Creates a Pokemon with one to four moves, preserving their supplied order.
     pub fn new(
         entry: &'static PokemonEntry,
         level: u8,
         stat_points: StatPoints,
         nature: Nature,
         item: Option<HeldItem>,
-        moves: [Move; 4],
+        moves: impl Into<Vec<Move>>,
     ) -> Result<Self, BattleError> {
         let level_cap = ChampionsRules::singles().level_cap;
 
@@ -378,6 +389,9 @@ impl Pokemon {
         if !stat_points.is_valid_for_champions() {
             return Err(BattleError::InvalidStatPoints);
         }
+
+        let moves = moves.into();
+        validate_move_count(moves.len())?;
 
         let stats = entry.base_stats.calculate(stat_points, nature);
         let max_hp = stats.hp;
@@ -497,6 +511,33 @@ mod tests {
         assert_eq!(rules.team_size, 6);
         assert_eq!(rules.selected_team_size, 3);
         assert!(rules.mega_stones_enabled);
+    }
+
+    #[test]
+    fn pokemon_requires_one_to_four_moves() {
+        for count in 0..=5 {
+            let result = Pokemon::new(
+                find_pokemon("Venusaur").unwrap(),
+                50,
+                StatPoints {
+                    hp: 0,
+                    attack: 0,
+                    defense: 0,
+                    special_attack: 0,
+                    special_defense: 0,
+                    speed: 0,
+                },
+                Nature::Hardy,
+                None,
+                vec![tackle(); count],
+            );
+
+            if count == 0 || count == 5 {
+                assert_eq!(result, Err(BattleError::InvalidMoveCount { count }));
+            } else {
+                assert_eq!(result.unwrap().moves.len(), count);
+            }
+        }
     }
 
     #[test]
