@@ -292,6 +292,94 @@ fn rejects_invalid_hp_in_either_roster() {
     }
 }
 
+#[test]
+fn only_equipped_move_slots_are_available_in_preview_and_battle() {
+    let mut player = roster("Charizard");
+    let mut opponent = roster("Charizard");
+    for (team, counts) in [
+        (&mut player, [1, 2, 3, 4, 1, 2]),
+        (&mut opponent, [4, 3, 2, 1, 4, 3]),
+    ] {
+        for (pokemon, count) in team.iter_mut().zip(counts) {
+            pokemon.moves.swap(0, 3); // Protect keeps the successful turn deterministic.
+            pokemon.moves.truncate(count);
+        }
+    }
+
+    let mut environment = Environment::from_rosters(player, opponent, [0, 4, 5]).unwrap();
+    let preview = environment.reset();
+    let Observation::TeamPreview(ref teams) = preview else {
+        panic!("expected team preview");
+    };
+    let masks = [
+        [true, false, false, false],
+        [true, true, false, false],
+        [true, true, true, false],
+        [true, true, true, true],
+    ];
+    assert_eq!(
+        teams.player.each_ref().map(|p| p.move_availability),
+        [masks[0], masks[1], masks[2], masks[3], masks[0], masks[1]]
+    );
+    assert_eq!(
+        teams.opponent.each_ref().map(|p| p.move_availability),
+        [masks[3], masks[2], masks[1], masks[0], masks[3], masks[2]]
+    );
+
+    for (lead, mask) in masks.into_iter().enumerate() {
+        assert_eq!(environment.reset(), preview);
+        let selected = environment
+            .step(Action::SelectTeam([lead, 4, 5]), Action::Move(0))
+            .unwrap();
+        let initial = battle_observation(selected.observation.clone());
+        assert_eq!(initial.player.roster()[lead].move_availability, mask);
+
+        for slot in (lead + 1)..=4 {
+            assert_eq!(
+                environment.step(Action::Move(slot), Action::Move(0)),
+                Err(ActionError::UnavailableMove)
+            );
+        }
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
+            selected
+        );
+        // Switch the opponent to its three-move reserve before testing its empty slot.
+        let switched = environment
+            .step(Action::Move(0), Action::Switch(5))
+            .unwrap();
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(3)),
+            Err(ActionError::UnavailableMove)
+        );
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
+            switched
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_move_counts_in_either_roster() {
+    for invalid_player in [true, false] {
+        for count in [0, 5] {
+            let mut player = roster("Charizard");
+            let mut opponent = roster("Venusaur");
+            let invalid = if invalid_player {
+                &mut player[5]
+            } else {
+                &mut opponent[5]
+            };
+            invalid.moves.resize(count, invalid.moves[0].clone());
+
+            assert!(matches!(
+                Environment::from_rosters(player, opponent, [0, 1, 2]),
+                Err(ActionError::Battle(BattleError::InvalidMoveCount { count: actual })) if actual == count
+            ));
+        }
+    }
+}
+
 fn battle_observation(observation: Observation) -> BattleObservation {
     let Observation::Battle(observation) = observation else {
         panic!("expected a battle observation")
