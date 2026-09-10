@@ -1,4 +1,6 @@
-use crate::info::{BattleError, HeldItem, Nature, Pokemon, PokemonType, StatPoints, Stats};
+use crate::info::{
+    BattleError, HeldItem, Nature, Pokemon, PokemonType, StatPoints, Stats, validate_move_count,
+};
 use crate::techdex::{
     AIR_SLASH, AURA_SPHERE, BITE, CLOSE_COMBAT, DARK_PULSE, DETECT, DRAGON_CLAW, DRAGON_DANCE,
     DRAGON_TAIL, EXTREME_SPEED, FIRE_BLAST, FIRE_PUNCH, FLAMETHROWER, HEX, HURRICANE, HYDRO_PUMP,
@@ -113,31 +115,34 @@ pub fn find_pokemon(name: &str) -> Option<&'static PokemonEntry> {
         .find(|entry| entry.name.eq_ignore_ascii_case(name))
 }
 
-pub fn build_pokemon_from_pokedex(
+/// Builds a Pokemon with one to four learnable moves in the supplied order.
+pub fn build_pokemon_from_pokedex<'a>(
     species_name: &str,
     level: u8,
     stat_points: StatPoints,
     nature: Nature,
-    move_names: [&str; 4],
+    move_names: impl AsRef<[&'a str]>,
 ) -> Result<Pokemon, PokedexError> {
     build_pokemon_from_pokedex_with_item(species_name, level, stat_points, nature, None, move_names)
 }
 
-pub fn build_pokemon_from_pokedex_with_item(
+/// Builds a Pokemon with a held item and one to four learnable moves in the supplied order.
+pub fn build_pokemon_from_pokedex_with_item<'a>(
     species_name: &str,
     level: u8,
     stat_points: StatPoints,
     nature: Nature,
     item: Option<HeldItem>,
-    move_names: [&str; 4],
+    move_names: impl AsRef<[&'a str]>,
 ) -> Result<Pokemon, PokedexError> {
     let species = find_pokemon(species_name).ok_or(PokedexError::PokemonNotFound)?;
-    let moves = [
-        find_learnable_move(species, move_names[0], 0)?.to_move(),
-        find_learnable_move(species, move_names[1], 1)?.to_move(),
-        find_learnable_move(species, move_names[2], 2)?.to_move(),
-        find_learnable_move(species, move_names[3], 3)?.to_move(),
-    ];
+    let move_names = move_names.as_ref();
+    validate_move_count(move_names.len())?;
+    let moves = move_names
+        .iter()
+        .enumerate()
+        .map(|(slot, name)| find_learnable_move(species, name, slot).map(|entry| entry.to_move()))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Pokemon::new(species, level, stat_points, nature, item, moves).map_err(PokedexError::from)
 }
@@ -241,6 +246,58 @@ mod tests {
         assert_eq!(lucario.moves[1].name, "Quick Attack");
         assert_eq!(lucario.moves[1].priority, 1);
         assert!(lucario.item.is_none());
+    }
+
+    #[test]
+    fn builders_require_one_to_four_moves_and_preserve_their_order() {
+        let names = [
+            "Aura Sphere",
+            "Quick Attack",
+            "Metal Claw",
+            "Close Combat",
+            "Detect",
+        ];
+
+        for count in 0..=5 {
+            let results = [
+                build_pokemon_from_pokedex(
+                    "Lucario",
+                    50,
+                    valid_stat_points(),
+                    Nature::Hardy,
+                    &names[..count],
+                ),
+                build_pokemon_from_pokedex_with_item(
+                    "Lucario",
+                    50,
+                    valid_stat_points(),
+                    Nature::Hardy,
+                    Some(HeldItem::MegaStone(crate::info::MegaStone::Lucarionite)),
+                    &names[..count],
+                ),
+            ];
+
+            for result in results {
+                if count == 0 || count == 5 {
+                    assert_eq!(
+                        result,
+                        Err(PokedexError::InvalidPokemon(
+                            BattleError::InvalidMoveCount { count }
+                        ))
+                    );
+                } else {
+                    let pokemon = result.unwrap();
+                    assert_eq!(
+                        pokemon
+                            .moves
+                            .iter()
+                            .map(|m| m.name.as_str())
+                            .collect::<Vec<_>>(),
+                        names[..count]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
