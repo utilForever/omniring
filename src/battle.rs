@@ -1,14 +1,55 @@
-use crate::{Action, ActionError, BattleState};
+use std::sync::Arc;
+
+use crate::info::{Pokemon, validate_move_count};
+use crate::{Action, ActionError, BattleState, StateError};
+
+pub(crate) type Rosters = ([Pokemon; 6], [Pokemon; 6]);
 
 /// A single battle that owns its state and delegates turn resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Battle {
     state: BattleState,
+    rosters: Option<Arc<Rosters>>,
 }
 
 impl Battle {
+    /// Creates a battle for caller-supplied transitions. Use `with_rosters` for simulation.
     pub fn new(state: BattleState) -> Self {
-        Self { state }
+        Self {
+            state,
+            rosters: None,
+        }
+    }
+
+    /// Binds immutable battle data for the lifetime of this battle.
+    /// Enabled move slots must exist in the corresponding roster; equipped moves may be disabled.
+    /// Runtime HP is taken from `state`, not from the supplied Pokemon.
+    ///
+    /// ```
+    /// use omniring::{ActionError, Battle, BattleState};
+    /// use omniring::info::Pokemon;
+    /// # fn turn(state: BattleState, player: [Pokemon; 6], opponent: [Pokemon; 6]) -> Result<(), ActionError> {
+    /// let mut battle = Battle::with_rosters(state, player, opponent)?;
+    /// let result = battle.simulate_turn(0, 0)?;
+    /// let current = battle.state();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_rosters(
+        state: BattleState,
+        player: [Pokemon; 6],
+        opponent: [Pokemon; 6],
+    ) -> Result<Self, ActionError> {
+        let rosters = (player, opponent);
+        validate_rosters(&state, &rosters)?;
+        Ok(Self {
+            state,
+            rosters: Some(Arc::new(rosters)),
+        })
+    }
+
+    pub(crate) fn rosters(&self) -> Result<Arc<Rosters>, ActionError> {
+        self.rosters.clone().ok_or(ActionError::MissingRosters)
     }
 
     pub fn state(&self) -> &BattleState {
@@ -51,11 +92,39 @@ impl Battle {
             resolve_turn(&mut next, player_action, opponent_action)?;
         }
 
+        if let Some(rosters) = &self.rosters {
+            validate_rosters(&next, rosters)?;
+        }
+
         next.terminated =
             !next.player.has_available_selected() || !next.opponent.has_available_selected();
+
+        if !replacement_pending {
+            next.turn_count += 1;
+        }
+
         self.state = next;
         Ok(&self.state)
     }
+}
+
+fn validate_rosters(state: &BattleState, rosters: &Rosters) -> Result<(), ActionError> {
+    for (team, roster) in [(&state.player, &rosters.0), (&state.opponent, &rosters.1)] {
+        for (runtime, pokemon) in team.roster().iter().zip(roster) {
+            validate_move_count(pokemon.moves.len()).map_err(ActionError::Battle)?;
+            if runtime
+                .move_availability
+                .iter()
+                .skip(pokemon.moves.len())
+                .any(|&available| available)
+            {
+                return Err(ActionError::InvalidState(
+                    StateError::InvalidMoveAvailability,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -209,6 +278,7 @@ mod tests {
         BattleState {
             player: team([true; 4]),
             opponent: team([true, false, true, true]),
+            turn_count: 1,
             terminated: false,
         }
     }

@@ -242,6 +242,7 @@ pub struct Pokemon {
     /// One to four equipped moves, in action-slot order.
     pub moves: Vec<Move>,
 
+    /// Initial HP used when creating an episode. Live HP belongs to `PokemonState`.
     pub current_hp: u16,
     pub can_mega_evolve: bool,
     pub has_mega_evolved: bool,

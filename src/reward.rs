@@ -87,6 +87,7 @@ mod tests {
         BattleState {
             player: team(player_hp),
             opponent: team(opponent_hp),
+            turn_count: 1,
             terminated,
         }
     }

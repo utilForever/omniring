@@ -1,7 +1,6 @@
-use crate::battle_logic::Battle as CoreBattle;
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
-    Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
+    Action, ActionError, Battle, BattleObservation, BattleState, PokemonState,
     TeamPreviewObservation, TeamState, calculate_reward,
 };
 
@@ -12,7 +11,8 @@ pub enum Observation {
     Battle(BattleObservation),
 }
 
-/// A minimal episode loop around a battle-state transition function.
+/// An episode loop whose battle owns the only mutable runtime state.
+/// The preview and selected opponent are immutable reset snapshots.
 pub struct Environment<F> {
     preview: TeamPreviewObservation,
     opponent: TeamState,
@@ -68,38 +68,8 @@ impl Environment<()> {
             preview,
             opponent_selection,
             move |state, action, opponent_action| {
-                // The rosters supply battle data; mutable HP belongs to the episode state.
-                // ponytail: retain core battle state when turn-dependent effects are supported.
-                let mut turn = CoreBattle::new(
-                    active_pokemon(&player, &state.player),
-                    active_pokemon(&opponent, &state.opponent),
-                );
-                let player_hp = turn.p1.current_hp;
-                let opponent_hp = turn.p2.current_hp;
-
-                match (action, opponent_action) {
-                    (Action::Move(player_move), Action::Move(opponent_move)) => {
-                        turn.simulate_turn(player_move, opponent_move).map(|_| ())
-                    }
-                    (Action::Move(slot), Action::Switch(_)) => {
-                        CoreBattle::execute_move(&turn.p1, &mut turn.p2, slot, false).map(|_| ())
-                    }
-                    (Action::Switch(_), Action::Move(slot)) => {
-                        CoreBattle::execute_move(&turn.p2, &mut turn.p1, slot, false).map(|_| ())
-                    }
-                    _ => return Err(ActionError::WrongPhase),
-                }
-                .map_err(ActionError::Battle)?;
-
-                state
-                    .player
-                    .damage_active(u32::from(player_hp - turn.p1.current_hp))
-                    .map_err(ActionError::InvalidState)?;
-                state
-                    .opponent
-                    .damage_active(u32::from(opponent_hp - turn.p2.current_hp))
-                    .map_err(ActionError::InvalidState)?;
-                Ok(())
+                // These rosters supply read-only battle data, never live HP or move availability.
+                Battle::resolve_turn(state, &player, &opponent, action, opponent_action)
             },
         )
     }
@@ -117,18 +87,6 @@ fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionErro
         .map_err(ActionError::InvalidState)
     });
     Ok([a?, b?, c?, d?, e?, f?])
-}
-
-fn active_pokemon(roster: &[Pokemon; 6], team: &TeamState) -> Pokemon {
-    let slot = team
-        .slot_active()
-        .expect("turn resolution requires an active Pokemon");
-
-    let mut pokemon = roster[slot].clone();
-    pokemon.current_hp = u16::try_from(team.roster()[slot].hp_curr())
-        .expect("episode HP cannot exceed the original roster's u16 HP");
-
-    pokemon
 }
 
 impl<F> Environment<F>
@@ -178,6 +136,7 @@ where
             let battle = self.battle.insert(Battle::new(BattleState {
                 player,
                 opponent,
+                turn_count: 1,
                 terminated: false,
             }));
 
@@ -240,12 +199,9 @@ fn observation(
     state: &BattleState,
     opponent_revealed: [bool; 6],
 ) -> Result<BattleObservation, ActionError> {
-    Ok(BattleObservation {
-        player: state.player.clone(),
-        opponent: OpponentObservation::new(&state.opponent, opponent_revealed)
-            .map_err(|_| ActionError::InvalidTeamSelection)?,
-        terminated: state.terminated,
-    })
+    state
+        .observation(opponent_revealed)
+        .map_err(|_| ActionError::InvalidTeamSelection)
 }
 
 #[cfg(test)]
@@ -291,6 +247,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(selected.reward, 0.0);
+        assert_eq!(environment.battle.as_ref().unwrap().state().turn_count, 1);
         assert!(!selected.terminated);
 
         assert!(matches!(
@@ -337,6 +294,13 @@ mod tests {
 
             match turn {
                 0 => {
+                    state.player.damage_active(1).unwrap();
+
+                    let mut roster = state.player.roster().clone();
+                    roster[0].move_availability[0] = false;
+
+                    state.player =
+                        TeamState::new(roster, *state.player.selected(), Some(1)).unwrap();
                     state.terminated = true;
                     Err(ActionError::InvalidSwitch)
                 }
@@ -370,6 +334,7 @@ mod tests {
 
         assert_eq!(retried.observation, selected.observation);
         assert_eq!(retried.reward, 0.0);
+        assert_eq!(environment.battle.as_ref().unwrap().state().turn_count, 2);
         assert!(!retried.terminated);
         assert_eq!(transitions.get(), 3);
     }
@@ -427,6 +392,7 @@ mod tests {
         BattleState {
             player: team([100; 3]),
             opponent: team(opponent_hp),
+            turn_count: 1,
             terminated,
         }
     }

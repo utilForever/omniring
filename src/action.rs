@@ -17,6 +17,7 @@ pub enum ActionError {
     InvalidSwitch,
     WrongPhase,
     BattleTerminated,
+    MissingRosters,
     InvalidState(StateError),
     Battle(BattleError),
 }
@@ -161,6 +162,7 @@ mod tests {
                 Some(0),
             )
             .unwrap(),
+            turn_count: 1,
             terminated: false,
         };
         let unchanged = state.clone();
@@ -209,6 +211,7 @@ mod tests {
             player: TeamState::new(roster(100), [true, true, true, false, false, false], None)
                 .unwrap(),
             opponent: state.opponent.clone(),
+            turn_count: 1,
             terminated: false,
         };
         let actions = replacement.legal_player_actions();

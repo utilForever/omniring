@@ -75,6 +75,16 @@ cargo test --test environment_battle
 
 These focused checks use the real battle logic to cover reset, team selection, damage across steps, fainting, forced replacements, and terminal win/loss rewards. They also verify that unselected Pokemon keep their HP and that a completed environment can start a fresh episode. They run automatically with `cargo test --all`.
 
+### Runtime State
+
+`Battle` owns one `BattleState` for both the simulator and environment. HP and move availability live in `PokemonState`; selection and active slots live in `TeamState`. `BattleState::observation` returns an independent snapshot and never changes the battle. Failed turns preserve the state, including its turn counter.
+
+`Environment::from_rosters` uses the supplied Pokemon HP to initialize/reset an episode. During turns, those rosters only supply read-only species, stats, and equipped moves. Turn resolution updates `BattleState` directly.
+
+For direct simulator users, `battle_logic::Battle` now refers to the same `Battle` exported at the crate root. Construct it with `Battle::with_rosters(state, player_roster, opponent_roster)?`, then call `simulate_turn(player_move, opponent_move)` or `determine_turn_order(player_move, opponent_move)`. The battle owns its fixed rosters. Construction and subsequent state transitions reject enabled move slots that are not equipped; equipped moves may still be disabled in the runtime state.
+
+Read live HP through `battle.state()` instead of `p1`/`p2`; the one-based counter is `battle.state().turn_count` (initialize it to `1`). Forced replacements do not advance it. `Battle::new(state)` and `play_turn` remain available for custom transition callbacks; calling the built-in simulator without bound rosters returns `ActionError::MissingRosters`. The low-level `execute_move` takes the attacking/defending `TeamState` and their read-only rosters, and reports HP as `u32`. A fainted team requires a replacement before it can be targeted again; turn/action errors use `ActionError`.
+
 ## Development
 
 Run the same core checks used in CI for code changes:

@@ -4,6 +4,22 @@ pub struct BattleState {
     pub player: TeamState,
     pub opponent: TeamState,
     pub terminated: bool,
+    /// One-based turn number; forced replacements do not advance it.
+    pub turn_count: u32,
+}
+
+impl BattleState {
+    /// Copies the player-visible state without changing the battle.
+    pub fn observation(
+        &self,
+        opponent_revealed: [bool; 6],
+    ) -> Result<BattleObservation, StateError> {
+        Ok(BattleObservation {
+            player: self.player.clone(),
+            opponent: OpponentObservation::new(&self.opponent, opponent_revealed)?,
+            terminated: self.terminated,
+        })
+    }
 }
 
 /// The public six-Pokemon rosters shown before team selection.
@@ -157,6 +173,7 @@ pub enum StateError {
     InvalidActiveSlot,
     InvalidRevealedSelection,
     InvalidHp,
+    InvalidMoveAvailability,
 }
 
 /// The battle state of one Pokemon.
@@ -231,6 +248,7 @@ mod tests {
         let state = BattleState {
             player,
             opponent,
+            turn_count: 1,
             terminated: false,
         };
 
