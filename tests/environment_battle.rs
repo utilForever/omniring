@@ -19,12 +19,16 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 
         let mut environment = Environment::from_rosters(player, opponent, [5, 2, 0]).unwrap();
         let preview = environment.reset();
+        assert!(matches!(preview, Observation::TeamPreview(_)));
+
         let selected = environment
             .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
             .unwrap();
         assert_eq!(selected.reward, 0.0);
+        assert!(!selected.terminated);
 
         let initial = battle_observation(selected.observation);
+        assert!(!initial.terminated);
         assert_eq!(initial.player.slot_active(), Some(4));
         assert_eq!(initial.opponent.slot_active(), Some(5));
         assert_eq!(
@@ -51,6 +55,21 @@ fn real_battles_run_to_win_or_loss_and_reset() {
                 assert_eq!(observation.opponent.roster(), initial.opponent.roster());
             }
 
+            let (losing_roster, selection) = if player_wins {
+                (observation.opponent.roster(), [5, 2, 0])
+            } else {
+                (observation.player.roster(), [4, 1, 3])
+            };
+
+            for (slot, pokemon) in losing_roster.iter().enumerate() {
+                let expected_hp = if selection[..=turn].contains(&slot) {
+                    0
+                } else {
+                    1
+                };
+                assert_eq!(pokemon.hp_curr(), expected_hp, "turn {turn}, slot {slot}");
+            }
+
             if turn < 2 {
                 assert_eq!(
                     environment.step(Action::Move(0), Action::Move(0)),
@@ -66,6 +85,11 @@ fn real_battles_run_to_win_or_loss_and_reset() {
                 let replacement = environment.step(action, opponent_action).unwrap();
                 assert_eq!(replacement.reward, 0.0);
                 assert!(!replacement.terminated);
+
+                let replaced = battle_observation(replacement.observation);
+                assert!(!replaced.terminated);
+                assert_eq!(replaced.player.roster(), observation.player.roster());
+                assert_eq!(replaced.opponent.roster(), observation.opponent.roster());
             }
         }
 
@@ -79,6 +103,8 @@ fn real_battles_run_to_win_or_loss_and_reset() {
         let restarted = environment
             .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
             .unwrap();
+        assert_eq!(restarted.reward, 0.0);
+        assert!(!restarted.terminated);
         assert_eq!(battle_observation(restarted.observation), initial);
         assert!(environment.step(Action::Move(0), Action::Move(0)).is_ok());
     }
@@ -261,6 +287,94 @@ fn rejects_invalid_hp_in_either_roster() {
             assert!(matches!(
                 Environment::from_rosters(player, opponent, [0, 1, 2]),
                 Err(ActionError::InvalidState(StateError::InvalidHp))
+            ));
+        }
+    }
+}
+
+#[test]
+fn only_equipped_move_slots_are_available_in_preview_and_battle() {
+    let mut player = roster("Charizard");
+    let mut opponent = roster("Charizard");
+    for (team, counts) in [
+        (&mut player, [1, 2, 3, 4, 1, 2]),
+        (&mut opponent, [4, 3, 2, 1, 4, 3]),
+    ] {
+        for (pokemon, count) in team.iter_mut().zip(counts) {
+            pokemon.moves.swap(0, 3); // Protect keeps the successful turn deterministic.
+            pokemon.moves.truncate(count);
+        }
+    }
+
+    let mut environment = Environment::from_rosters(player, opponent, [0, 4, 5]).unwrap();
+    let preview = environment.reset();
+    let Observation::TeamPreview(ref teams) = preview else {
+        panic!("expected team preview");
+    };
+    let masks = [
+        [true, false, false, false],
+        [true, true, false, false],
+        [true, true, true, false],
+        [true, true, true, true],
+    ];
+    assert_eq!(
+        teams.player.each_ref().map(|p| p.move_availability),
+        [masks[0], masks[1], masks[2], masks[3], masks[0], masks[1]]
+    );
+    assert_eq!(
+        teams.opponent.each_ref().map(|p| p.move_availability),
+        [masks[3], masks[2], masks[1], masks[0], masks[3], masks[2]]
+    );
+
+    for (lead, mask) in masks.into_iter().enumerate() {
+        assert_eq!(environment.reset(), preview);
+        let selected = environment
+            .step(Action::SelectTeam([lead, 4, 5]), Action::Move(0))
+            .unwrap();
+        let initial = battle_observation(selected.observation.clone());
+        assert_eq!(initial.player.roster()[lead].move_availability, mask);
+
+        for slot in (lead + 1)..=4 {
+            assert_eq!(
+                environment.step(Action::Move(slot), Action::Move(0)),
+                Err(ActionError::UnavailableMove)
+            );
+        }
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
+            selected
+        );
+        // Switch the opponent to its three-move reserve before testing its empty slot.
+        let switched = environment
+            .step(Action::Move(0), Action::Switch(5))
+            .unwrap();
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(3)),
+            Err(ActionError::UnavailableMove)
+        );
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
+            switched
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_move_counts_in_either_roster() {
+    for invalid_player in [true, false] {
+        for count in [0, 5] {
+            let mut player = roster("Charizard");
+            let mut opponent = roster("Venusaur");
+            let invalid = if invalid_player {
+                &mut player[5]
+            } else {
+                &mut opponent[5]
+            };
+            invalid.moves.resize(count, invalid.moves[0].clone());
+
+            assert!(matches!(
+                Environment::from_rosters(player, opponent, [0, 1, 2]),
+                Err(ActionError::Battle(BattleError::InvalidMoveCount { count: actual })) if actual == count
             ));
         }
     }

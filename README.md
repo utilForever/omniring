@@ -67,6 +67,14 @@ Its end-to-end self-check runs with `cargo test --all`, or on its own:
 cargo test --example battle_demo
 ```
 
+### 4. Run the Environment Self-Checks
+
+```bash
+cargo test --test environment_battle
+```
+
+These focused checks use the real battle logic to cover reset, team selection, damage across steps, fainting, forced replacements, and terminal win/loss rewards. They also verify that unselected Pokemon keep their HP and that a completed environment can start a fresh episode. They run automatically with `cargo test --all`.
+
 ## Development
 
 Run the same core checks used in CI for code changes:
