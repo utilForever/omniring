@@ -1,3 +1,5 @@
+use crate::battle_logic::Battle as CoreBattle;
+use crate::info::Pokemon;
 use crate::{
     Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
     TeamPreviewObservation, TeamState, calculate_reward,
@@ -24,6 +26,107 @@ pub struct StepOutcome {
     pub observation: Observation,
     pub reward: f32,
     pub terminated: bool,
+}
+
+impl Environment<()> {
+    /// Creates an environment using the core battle logic and four moves per Pokemon.
+    /// Roster slots are preserved; the first selected slot is each side's lead.
+    /// `reset` restores the supplied HP and returns to team preview.
+    ///
+    /// ```
+    /// use omniring::{Action, ActionError, Environment};
+    /// use omniring::info::Pokemon;
+    ///
+    /// # fn episode(player: [Pokemon; 6], opponent: [Pokemon; 6]) -> Result<(), ActionError> {
+    /// let mut env = Environment::from_rosters(player, opponent, [0, 1, 2])?;
+    /// let preview = env.reset();
+    /// // During preview, the opponent action is ignored: its team was selected above.
+    /// env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
+    /// let turn = env.step(Action::Move(0), Action::Move(0))?;
+    /// // Use turn.observation, turn.reward, and turn.terminated for training.
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[expect(
+        clippy::type_complexity,
+        reason = "Reuse the generic environment without boxing its resolver"
+    )]
+    pub fn from_rosters(
+        player: [Pokemon; 6],
+        opponent: [Pokemon; 6],
+        opponent_selection: [usize; 3],
+    ) -> Result<
+        Environment<impl FnMut(&mut BattleState, Action, Action) -> Result<(), ActionError>>,
+        ActionError,
+    > {
+        let preview = TeamPreviewObservation {
+            player: preview_roster(&player)?,
+            opponent: preview_roster(&opponent)?,
+        };
+
+        Environment::new(
+            preview,
+            opponent_selection,
+            move |state, action, opponent_action| {
+                // The rosters supply battle data; mutable HP belongs to the episode state.
+                // ponytail: retain core battle state when turn-dependent effects are supported.
+                let mut turn = CoreBattle::new(
+                    active_pokemon(&player, &state.player),
+                    active_pokemon(&opponent, &state.opponent),
+                );
+                let player_hp = turn.p1.current_hp;
+                let opponent_hp = turn.p2.current_hp;
+
+                match (action, opponent_action) {
+                    (Action::Move(player_move), Action::Move(opponent_move)) => {
+                        turn.simulate_turn(player_move, opponent_move).map(|_| ())
+                    }
+                    (Action::Move(slot), Action::Switch(_)) => {
+                        CoreBattle::execute_move(&turn.p1, &mut turn.p2, slot, false).map(|_| ())
+                    }
+                    (Action::Switch(_), Action::Move(slot)) => {
+                        CoreBattle::execute_move(&turn.p2, &mut turn.p1, slot, false).map(|_| ())
+                    }
+                    _ => return Err(ActionError::WrongPhase),
+                }
+                .map_err(ActionError::Battle)?;
+
+                state
+                    .player
+                    .damage_active(u32::from(player_hp - turn.p1.current_hp))
+                    .map_err(ActionError::InvalidState)?;
+                state
+                    .opponent
+                    .damage_active(u32::from(opponent_hp - turn.p2.current_hp))
+                    .map_err(ActionError::InvalidState)?;
+                Ok(())
+            },
+        )
+    }
+}
+
+fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionError> {
+    let [a, b, c, d, e, f] = roster.each_ref().map(|pokemon| {
+        PokemonState::new(
+            u32::from(pokemon.current_hp),
+            u32::from(pokemon.stats.hp),
+            [true; 4],
+        )
+        .map_err(ActionError::InvalidState)
+    });
+    Ok([a?, b?, c?, d?, e?, f?])
+}
+
+fn active_pokemon(roster: &[Pokemon; 6], team: &TeamState) -> Pokemon {
+    let slot = team
+        .slot_active()
+        .expect("turn resolution requires an active Pokemon");
+
+    let mut pokemon = roster[slot].clone();
+    pokemon.current_hp = u16::try_from(team.roster()[slot].hp_curr())
+        .expect("episode HP cannot exceed the original roster's u16 HP");
+
+    pokemon
 }
 
 impl<F> Environment<F>
@@ -91,6 +194,11 @@ where
         let outcome = (|| {
             let battle = self.battle.as_mut().unwrap();
             let state = battle.play_turn(action, opponent_action, &mut self.transition)?;
+
+            // A successful switch reveals its slot even if the incoming Pokemon fainted.
+            if let Action::Switch(slot) = opponent_action {
+                self.opponent_revealed[slot] = true;
+            }
 
             if let Some(active) = state.opponent.slot_active() {
                 self.opponent_revealed[active] = true;

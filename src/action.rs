@@ -1,4 +1,5 @@
-use crate::state::{BattleState, TeamPreviewObservation, TeamState};
+use crate::info::BattleError;
+use crate::state::{BattleState, StateError, TeamPreviewObservation, TeamState};
 
 /// An action available during team preview or a battle turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub enum ActionError {
     InvalidSwitch,
     WrongPhase,
     BattleTerminated,
+    InvalidState(StateError),
+    Battle(BattleError),
 }
 
 impl BattleState {
