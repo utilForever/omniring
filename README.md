@@ -51,6 +51,22 @@ cargo check --all
 cargo test --all
 ```
 
+### 3. Run a Complete Battle
+
+```bash
+cargo run --example battle_demo
+```
+
+The scripted demo creates a level-50 Charizard and Venusaur with four moves each, then copies each Pokemon into a six-Pokemon roster. Both Trainers select slots `[0, 1, 2]` and field one Pokemon at a time. Each side uses its first move and automatically replaces fainted Pokemon until one selected team is defeated.
+
+The output shows HP, actions (zero-based slots), step rewards, and the winner with the total reward. Damage rolls can vary between runs. Forced replacements are separate steps and do not consume an attack turn. The demo fails if it cannot finish within 100 steps.
+
+Its end-to-end self-check runs with `cargo test --all`, or on its own:
+
+```bash
+cargo test --example battle_demo
+```
+
 ## Development
 
 Run the same core checks used in CI for code changes:

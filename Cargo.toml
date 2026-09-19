@@ -13,5 +13,9 @@ categories = ["game-development", "simulation", "artificial-intelligence"]
 name = "omniring"
 path = "src/lib.rs"
 
+[[example]]
+name = "battle_demo"
+test = true
+
 [dependencies]
 rand = "0.10.2"
