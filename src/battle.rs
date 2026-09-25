@@ -64,6 +64,28 @@ mod tests {
     use crate::{Action, ActionError, BattleState, PokemonState, TeamState};
 
     #[test]
+    fn failed_resolution_discards_all_runtime_mutations() {
+        let initial = state();
+        let mut battle = Battle::new(initial.clone());
+
+        assert_eq!(
+            battle.play_turn(Action::Switch(1), Action::Move(0), |next, _, _| {
+                next.player.damage_active(25).unwrap();
+                next.opponent = TeamState::new(
+                    team([false; 4]).roster().clone(),
+                    [false, true, true, true, false, false],
+                    Some(1),
+                )
+                .unwrap();
+                next.terminated = true;
+                Err(ActionError::InvalidSwitch)
+            }),
+            Err(ActionError::InvalidSwitch)
+        );
+        assert_eq!(battle.state(), &initial);
+    }
+
+    #[test]
     fn validates_delegates_and_stops_after_termination() {
         let mut battle = Battle::new(state());
 

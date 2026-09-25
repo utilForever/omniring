@@ -258,6 +258,23 @@ mod tests {
     };
 
     #[test]
+    fn observation_snapshots_do_not_mutate_or_alias_battle_state() {
+        let original = state([100; 3], false);
+        let before = original.clone();
+        let revealed = [true, false, false, false, false, false];
+        let expected = super::observation(&original, revealed).unwrap();
+
+        let mut snapshot = expected.clone();
+        snapshot.player.damage_active(50).unwrap();
+        snapshot.player.switch_to(1).unwrap();
+        snapshot.terminated = true;
+
+        assert_ne!(snapshot, expected);
+        assert_eq!(super::observation(&original, revealed).unwrap(), expected);
+        assert_eq!(original, before);
+    }
+
+    #[test]
     fn runs_a_hidden_information_episode_from_preview_to_reset() {
         let preview = TeamPreviewObservation {
             player: roster(100),
@@ -358,11 +375,11 @@ mod tests {
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
         assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)),
+            environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidSwitch)
         );
         assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)),
+            environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidTeamSelection)
         );
 
