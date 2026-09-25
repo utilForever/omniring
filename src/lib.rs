@@ -1,5 +1,6 @@
 mod action;
 pub mod battle;
+mod damage;
 mod environment;
 mod reward;
 mod state;
