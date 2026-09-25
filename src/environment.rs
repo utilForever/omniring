@@ -1,4 +1,3 @@
-use crate::battle_logic::Battle as CoreBattle;
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
     Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
@@ -68,38 +67,7 @@ impl Environment<()> {
             preview,
             opponent_selection,
             move |state, action, opponent_action| {
-                // The rosters supply battle data; mutable HP belongs to the episode state.
-                // ponytail: retain core battle state when turn-dependent effects are supported.
-                let mut turn = CoreBattle::new(
-                    active_pokemon(&player, &state.player),
-                    active_pokemon(&opponent, &state.opponent),
-                );
-                let player_hp = turn.p1.current_hp;
-                let opponent_hp = turn.p2.current_hp;
-
-                match (action, opponent_action) {
-                    (Action::Move(player_move), Action::Move(opponent_move)) => {
-                        turn.simulate_turn(player_move, opponent_move).map(|_| ())
-                    }
-                    (Action::Move(slot), Action::Switch(_)) => {
-                        CoreBattle::execute_move(&turn.p1, &mut turn.p2, slot, false).map(|_| ())
-                    }
-                    (Action::Switch(_), Action::Move(slot)) => {
-                        CoreBattle::execute_move(&turn.p2, &mut turn.p1, slot, false).map(|_| ())
-                    }
-                    _ => return Err(ActionError::WrongPhase),
-                }
-                .map_err(ActionError::Battle)?;
-
-                state
-                    .player
-                    .damage_active(u32::from(player_hp - turn.p1.current_hp))
-                    .map_err(ActionError::InvalidState)?;
-                state
-                    .opponent
-                    .damage_active(u32::from(opponent_hp - turn.p2.current_hp))
-                    .map_err(ActionError::InvalidState)?;
-                Ok(())
+                Battle::resolve_turn(state, &player, &opponent, action, opponent_action)
             },
         )
     }
@@ -117,18 +85,6 @@ fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionErro
         .map_err(ActionError::InvalidState)
     });
     Ok([a?, b?, c?, d?, e?, f?])
-}
-
-fn active_pokemon(roster: &[Pokemon; 6], team: &TeamState) -> Pokemon {
-    let slot = team
-        .slot_active()
-        .expect("turn resolution requires an active Pokemon");
-
-    let mut pokemon = roster[slot].clone();
-    pokemon.current_hp = u16::try_from(team.roster()[slot].hp_curr())
-        .expect("episode HP cannot exceed the original roster's u16 HP");
-
-    pokemon
 }
 
 impl<F> Environment<F>
@@ -258,6 +214,23 @@ mod tests {
     };
 
     #[test]
+    fn observation_snapshots_do_not_mutate_or_alias_battle_state() {
+        let original = state([100; 3], false);
+        let before = original.clone();
+        let revealed = [true, false, false, false, false, false];
+        let expected = super::observation(&original, revealed).unwrap();
+
+        let mut snapshot = expected.clone();
+        snapshot.player.damage_active(50).unwrap();
+        snapshot.player.switch_to(1).unwrap();
+        snapshot.terminated = true;
+
+        assert_ne!(snapshot, expected);
+        assert_eq!(super::observation(&original, revealed).unwrap(), expected);
+        assert_eq!(original, before);
+    }
+
+    #[test]
     fn runs_a_hidden_information_episode_from_preview_to_reset() {
         let preview = TeamPreviewObservation {
             player: roster(100),
@@ -358,11 +331,11 @@ mod tests {
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
         assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)),
+            environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidSwitch)
         );
         assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)),
+            environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidTeamSelection)
         );
 

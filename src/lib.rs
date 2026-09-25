@@ -1,5 +1,6 @@
 mod action;
-mod battle;
+pub mod battle;
+mod damage;
 mod environment;
 mod reward;
 mod state;
@@ -13,7 +14,6 @@ pub use state::{
     TeamPreviewObservation, TeamState,
 };
 
-pub mod battle_logic;
 pub mod info;
 pub mod pokedex;
 pub mod techdex;
