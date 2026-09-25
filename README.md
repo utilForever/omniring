@@ -79,12 +79,6 @@ These focused checks use the real battle logic to cover reset, team selection, d
 
 `omniring::Battle` owns the runtime `BattleState`. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state unchanged, and observations are independent snapshots.
 
-The former `battle_logic::Battle::new(p1, p2)` API has been replaced by `omniring::Battle::new(state)`, where `state` contains the selected six-slot rosters. Advance it with:
-
-    battle.play_turn_with_rosters(&player_roster, &opponent_roster, Action::Move(0), Action::Move(0))?;
-
-Pure damage calculation is available as `battle_logic::calculate_damage`. `Attackresult::defender_hp_after` now uses `u32`; the former core-only `turn_count` field has been removed. The environment API is unchanged.
-
 ## Development
 
 Run the same core checks used in CI for code changes:
