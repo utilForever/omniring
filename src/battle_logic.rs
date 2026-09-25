@@ -259,7 +259,7 @@ impl Battle {
             });
         }
 
-        let damage_result = Self::calculate_damage(attacker, defender, selected_move, None)?;
+        let damage_result = calculate_damage(attacker, defender, selected_move, None)?;
 
         defender.current_hp = defender.current_hp.saturating_sub(damage_result.damage);
 
@@ -273,80 +273,81 @@ impl Battle {
             defender_hp_after: defender.current_hp,
         })
     }
+}
 
-    pub fn calculate_damage(
-        attacker: &Pokemon,
-        defender: &Pokemon,
-        selected_move: &Move,
-        seed: Option<u64>,
-    ) -> Result<DamageResult, BattleError> {
-        if selected_move.category == MoveCategory::Status || selected_move.power == 0 {
-            // TODO: Handle status moves that affect stats, conditions, etc.
-            //       For now, we return 0 damage for status moves.
-            return Ok(DamageResult {
-                damage: 0,
-                effectiveness: 1.0,
-            });
-        }
-
-        let (attack, defense) = match selected_move.category {
-            MoveCategory::Physical => (attacker.stats.attack, defender.stats.defense),
-            MoveCategory::Special => (
-                attacker.stats.special_attack,
-                defender.stats.special_defense,
-            ),
-            MoveCategory::Status => unreachable!("status moves return before damage calculation"),
-        };
-
-        if defense == 0 {
-            return Err(BattleError::ZeroDefenseStat);
-        }
-
-        let mut modifiers = DamageModifier::default().with_raw_random_roll(seed)?;
-        modifiers.update_from_battle(attacker, defender, selected_move);
-
-        if !(85..=100).contains(&modifiers.random_percent) {
-            return Err(BattleError::InvalidDamageRandomPercent {
-                percent: modifiers.random_percent,
-            });
-        }
-
-        let power = modifiers
-            .power_modifier
-            .apply_to(u64::from(selected_move.power))?;
-        let attack = modifiers.attack_modifier.apply_to(u64::from(attack))?;
-        let defense = modifiers.defense_modifier.apply_to(u64::from(defense))?;
-
-        // reference for damage formula: https://bulbapedia.bulbagarden.net/wiki/Damage#Damage_formula
-        let level_factor = (u64::from(attacker.level) * 2) / 5 + 2;
-        let mut damage = ((level_factor * power * attack) / (50 * defense)) + 2;
-
-        // This modifier only applies in double battles when the move actually hits multiple targets
-        // damage = modifiers.spread.apply_to(damage)?;
-
-        damage = modifiers.weather.apply_to(damage)?;
-        damage = modifiers.critical.apply_to(damage)?;
-        damage = apply_random_percent(damage, modifiers.random_percent);
-
-        damage = modifiers.stab.apply_to(damage)?;
-        damage = modifiers.type_effectiveness.apply_to(damage)?;
-        damage = modifiers.burn.apply_to(damage)?;
-        // Apply all remaining final damage modifiers that do not belong to the
-        // explicit calculation stages above, such as screens, abilities, and items.
-        damage = modifiers.other.apply_to(damage)?;
-
-        let effectiveness = type_effectiveness_against(selected_move.r#type, defender);
-        let damage = if effectiveness == 0.0 {
-            0
-        } else {
-            damage.max(1).min(u64::from(u16::MAX)) as u16
-        };
-
-        Ok(DamageResult {
-            damage,
-            effectiveness,
-        })
+/// Calculates damage without reading or changing either Pokemon's runtime HP.
+pub fn calculate_damage(
+    attacker: &Pokemon,
+    defender: &Pokemon,
+    selected_move: &Move,
+    seed: Option<u64>,
+) -> Result<DamageResult, BattleError> {
+    if selected_move.category == MoveCategory::Status || selected_move.power == 0 {
+        // TODO: Handle status moves that affect stats, conditions, etc.
+        //       For now, we return 0 damage for status moves.
+        return Ok(DamageResult {
+            damage: 0,
+            effectiveness: 1.0,
+        });
     }
+
+    let (attack, defense) = match selected_move.category {
+        MoveCategory::Physical => (attacker.stats.attack, defender.stats.defense),
+        MoveCategory::Special => (
+            attacker.stats.special_attack,
+            defender.stats.special_defense,
+        ),
+        MoveCategory::Status => unreachable!("status moves return before damage calculation"),
+    };
+
+    if defense == 0 {
+        return Err(BattleError::ZeroDefenseStat);
+    }
+
+    let mut modifiers = DamageModifier::default().with_raw_random_roll(seed)?;
+    modifiers.update_from_battle(attacker, defender, selected_move);
+
+    if !(85..=100).contains(&modifiers.random_percent) {
+        return Err(BattleError::InvalidDamageRandomPercent {
+            percent: modifiers.random_percent,
+        });
+    }
+
+    let power = modifiers
+        .power_modifier
+        .apply_to(u64::from(selected_move.power))?;
+    let attack = modifiers.attack_modifier.apply_to(u64::from(attack))?;
+    let defense = modifiers.defense_modifier.apply_to(u64::from(defense))?;
+
+    // reference for damage formula: https://bulbapedia.bulbagarden.net/wiki/Damage#Damage_formula
+    let level_factor = (u64::from(attacker.level) * 2) / 5 + 2;
+    let mut damage = ((level_factor * power * attack) / (50 * defense)) + 2;
+
+    // This modifier only applies in double battles when the move actually hits multiple targets
+    // damage = modifiers.spread.apply_to(damage)?;
+
+    damage = modifiers.weather.apply_to(damage)?;
+    damage = modifiers.critical.apply_to(damage)?;
+    damage = apply_random_percent(damage, modifiers.random_percent);
+
+    damage = modifiers.stab.apply_to(damage)?;
+    damage = modifiers.type_effectiveness.apply_to(damage)?;
+    damage = modifiers.burn.apply_to(damage)?;
+    // Apply all remaining final damage modifiers that do not belong to the
+    // explicit calculation stages above, such as screens, abilities, and items.
+    damage = modifiers.other.apply_to(damage)?;
+
+    let effectiveness = type_effectiveness_against(selected_move.r#type, defender);
+    let damage = if effectiveness == 0.0 {
+        0
+    } else {
+        damage.max(1).min(u64::from(u16::MAX)) as u16
+    };
+
+    Ok(DamageResult {
+        damage,
+        effectiveness,
+    })
 }
 
 fn apply_random_percent(value: u64, percent: u8) -> u64 {
@@ -513,8 +514,7 @@ mod tests {
                 0,
             );
 
-            let result =
-                Battle::calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
+            let result = calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
             assert_eq!(result.damage, expected_damage, "{case}");
             assert_eq!(result.effectiveness, expected_effectiveness, "{case}");
         }
@@ -533,8 +533,7 @@ mod tests {
             0,
         );
 
-        let result =
-            Battle::calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
+        let result = calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
         assert_eq!(result.damage, 1);
         assert_eq!(result.effectiveness, 0.25);
     }
