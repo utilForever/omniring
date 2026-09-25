@@ -1,3 +1,4 @@
+use crate::info::Pokemon;
 use crate::{Action, ActionError, BattleState};
 
 /// A single battle that owns its state and delegates turn resolution.
@@ -13,6 +14,26 @@ impl Battle {
 
     pub fn state(&self) -> &BattleState {
         &self.state
+    }
+
+    /// Resolves a turn using immutable calculation data for the corresponding roster slots.
+    /// HP, selection, active slots, and move availability come from this battle's state.
+    /// A failed turn leaves the state unchanged. An available move missing from the
+    /// supplied roster returns `ActionError::Battle(BattleError::InvalidMoveIndex)`.
+    pub fn play_turn_with_rosters(
+        &mut self,
+        player: &[Pokemon; 6],
+        opponent: &[Pokemon; 6],
+        player_action: Action,
+        opponent_action: Action,
+    ) -> Result<&BattleState, ActionError> {
+        self.play_turn(
+            player_action,
+            opponent_action,
+            |state, action, opponent_action| {
+                crate::battle_logic::resolve_turn(state, player, opponent, action, opponent_action)
+            },
+        )
     }
 
     pub fn play_turn(
