@@ -134,7 +134,7 @@ impl Battle {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Attackresult {
+pub struct AttackResult {
     pub attacker: String,
     pub defender: String,
     pub move_name: String,
@@ -145,9 +145,9 @@ pub struct Attackresult {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Turnresult {
-    pub first: Attackresult,
-    pub second: Option<Attackresult>,
+pub struct TurnResult {
+    pub first: AttackResult,
+    pub second: Option<AttackResult>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,7 +183,7 @@ fn simulate_turn(
     second_team: &mut TeamState,
     first_move: usize,
     second_move: usize,
-) -> Result<Turnresult, ActionError> {
+) -> Result<TurnResult, ActionError> {
     if first_team.slot_active().is_none() || second_team.slot_active().is_none() {
         return Err(ActionError::Battle(BattleError::FaintedPokemonCannotBattle));
     }
@@ -221,7 +221,7 @@ fn simulate_turn(
             is_protective_status_move(&faster.moves[faster_move]),
         )?)
     };
-    Ok(Turnresult { first, second })
+    Ok(TurnResult { first, second })
 }
 
 fn execute_move(
@@ -231,7 +231,7 @@ fn execute_move(
     defender_team: &mut TeamState,
     move_index: usize,
     defender_is_protected: bool,
-) -> Result<Attackresult, ActionError> {
+) -> Result<AttackResult, ActionError> {
     if attacker_team.slot_active().is_none() {
         return Err(ActionError::Battle(BattleError::FaintedPokemonCannotAttack));
     }
@@ -255,7 +255,7 @@ fn execute_move(
         result
     };
 
-    Ok(Attackresult {
+    Ok(AttackResult {
         attacker: attacker.entry.name.to_string(),
         defender: defender.entry.name.to_string(),
         move_name: selected_move.name.clone(),
