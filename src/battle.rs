@@ -32,7 +32,7 @@ impl Battle {
             player_action,
             opponent_action,
             |state, action, opponent_action| {
-                resolve_turn(state, player, opponent, action, opponent_action)
+                Self::resolve_turn(state, player, opponent, action, opponent_action)
             },
         )
     }
@@ -78,6 +78,59 @@ impl Battle {
         self.state = next;
         Ok(&self.state)
     }
+
+    /// Resolves attacks against the candidate owned by `Battle::play_turn`.
+    /// Actions are validated and switches applied before this resolver runs.
+    pub(crate) fn resolve_turn(
+        state: &mut BattleState,
+        player_roster: &[Pokemon; 6],
+        opponent_roster: &[Pokemon; 6],
+        action: Action,
+        opponent_action: Action,
+    ) -> Result<(), ActionError> {
+        let player_slot = state
+            .player
+            .slot_active()
+            .ok_or(ActionError::InvalidState(StateError::InvalidActiveSlot))?;
+        let opponent_slot = state
+            .opponent
+            .slot_active()
+            .ok_or(ActionError::InvalidState(StateError::InvalidActiveSlot))?;
+
+        let player = &player_roster[player_slot];
+        let opponent = &opponent_roster[opponent_slot];
+
+        match (action, opponent_action) {
+            (Action::Move(first), Action::Move(second)) => simulate_turn(
+                player,
+                &mut state.player,
+                opponent,
+                &mut state.opponent,
+                first,
+                second,
+            )
+            .map(|_| ()),
+            (Action::Move(slot), Action::Switch(_)) => execute_move(
+                player,
+                &state.player,
+                opponent,
+                &mut state.opponent,
+                slot,
+                false,
+            )
+            .map(|_| ()),
+            (Action::Switch(_), Action::Move(slot)) => execute_move(
+                opponent,
+                &state.opponent,
+                player,
+                &mut state.player,
+                slot,
+                false,
+            )
+            .map(|_| ()),
+            _ => Err(ActionError::WrongPhase),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,59 +154,6 @@ pub struct Turnresult {
 pub enum TurnOrder {
     FirstPokemon,
     SecondPokemon,
-}
-
-/// Resolves attacks against the candidate owned by `Battle::play_turn`.
-/// Actions are validated and switches applied before this resolver runs.
-pub(crate) fn resolve_turn(
-    state: &mut BattleState,
-    player_roster: &[Pokemon; 6],
-    opponent_roster: &[Pokemon; 6],
-    action: Action,
-    opponent_action: Action,
-) -> Result<(), ActionError> {
-    let player_slot = state
-        .player
-        .slot_active()
-        .ok_or(ActionError::InvalidState(StateError::InvalidActiveSlot))?;
-    let opponent_slot = state
-        .opponent
-        .slot_active()
-        .ok_or(ActionError::InvalidState(StateError::InvalidActiveSlot))?;
-
-    let player = &player_roster[player_slot];
-    let opponent = &opponent_roster[opponent_slot];
-
-    match (action, opponent_action) {
-        (Action::Move(first), Action::Move(second)) => simulate_turn(
-            player,
-            &mut state.player,
-            opponent,
-            &mut state.opponent,
-            first,
-            second,
-        )
-        .map(|_| ()),
-        (Action::Move(slot), Action::Switch(_)) => execute_move(
-            player,
-            &state.player,
-            opponent,
-            &mut state.opponent,
-            slot,
-            false,
-        )
-        .map(|_| ()),
-        (Action::Switch(_), Action::Move(slot)) => execute_move(
-            opponent,
-            &state.opponent,
-            player,
-            &mut state.player,
-            slot,
-            false,
-        )
-        .map(|_| ()),
-        _ => Err(ActionError::WrongPhase),
-    }
 }
 
 fn determine_turn_order(

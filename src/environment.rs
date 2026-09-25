@@ -58,8 +58,6 @@ impl Environment<()> {
         Environment<impl FnMut(&mut BattleState, Action, Action) -> Result<(), ActionError>>,
         ActionError,
     > {
-        use crate::battle::resolve_turn;
-
         let preview = TeamPreviewObservation {
             player: preview_roster(&player)?,
             opponent: preview_roster(&opponent)?,
@@ -69,7 +67,7 @@ impl Environment<()> {
             preview,
             opponent_selection,
             move |state, action, opponent_action| {
-                resolve_turn(state, &player, &opponent, action, opponent_action)
+                Battle::resolve_turn(state, &player, &opponent, action, opponent_action)
             },
         )
     }
