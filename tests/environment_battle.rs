@@ -474,7 +474,7 @@ fn direct_battle_keeps_runtime_move_availability() {
 
     let mut battle = Battle::new(runtime_state());
     battle
-        .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+        .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
             state.player = runtime_team(100_000, [true, false, true, true]);
             Ok(())
         })

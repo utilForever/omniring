@@ -1,16 +1,30 @@
+use crate::damage::calculate_damage_with_rng;
 pub use crate::damage::{DamageModifier, DamageResult, Fraction, calculate_damage};
 use crate::info::{BattleError, Move, MoveCategory, Pokemon};
 use crate::{Action, ActionError, BattleState, StateError, TeamState};
+use rand::{RngExt, SeedableRng, rngs::SmallRng};
 
-/// A single battle that owns its state and delegates turn resolution.
+/// A single battle that owns its state and random stream and delegates turn resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Battle {
     state: BattleState,
+    pub(crate) rng: SmallRng,
 }
 
 impl Battle {
+    /// Creates a battle with a randomly chosen seed.
     pub fn new(state: BattleState) -> Self {
-        Self { state }
+        Self::with_seed(state, rand::random())
+    }
+
+    /// Creates a reproducible battle. Cloning a battle also copies its random stream.
+    /// Replays require the same initial state, actions, rosters, library versions, and target platform.
+    pub fn with_seed(state: BattleState, seed: u64) -> Self {
+        Self::with_rng(state, SmallRng::seed_from_u64(seed))
+    }
+
+    pub(crate) fn with_rng(state: BattleState, rng: SmallRng) -> Self {
+        Self { state, rng }
     }
 
     pub fn state(&self) -> &BattleState {
@@ -19,7 +33,7 @@ impl Battle {
 
     /// Resolves a turn using immutable calculation data for the corresponding roster slots.
     /// HP, selection, active slots, and move availability come from this battle's state.
-    /// A failed turn leaves the state unchanged. An available move missing from the
+    /// A failed turn leaves the state and random stream unchanged. An available move missing from the
     /// supplied roster returns `ActionError::Battle(BattleError::InvalidMoveIndex)`.
     pub fn play_turn_with_rosters(
         &mut self,
@@ -31,17 +45,25 @@ impl Battle {
         self.play_turn(
             player_action,
             opponent_action,
-            |state, action, opponent_action| {
-                Self::resolve_turn(state, player, opponent, action, opponent_action)
+            |state, action, opponent_action, rng| {
+                Self::resolve_turn(state, player, opponent, action, opponent_action, rng)
             },
         )
     }
 
+    /// Resolves a turn with a custom transition using this battle's random stream.
+    /// State and random draws are committed only on success. Side effects captured by
+    /// the callback are the caller's responsibility and cannot be rolled back here.
     pub fn play_turn(
         &mut self,
         player_action: Action,
         opponent_action: Action,
-        resolve_turn: impl FnOnce(&mut BattleState, Action, Action) -> Result<(), ActionError>,
+        resolve_turn: impl FnOnce(
+            &mut BattleState,
+            Action,
+            Action,
+            &mut SmallRng,
+        ) -> Result<(), ActionError>,
     ) -> Result<&BattleState, ActionError> {
         if self.state.terminated {
             return Err(ActionError::BattleTerminated);
@@ -50,6 +72,7 @@ impl Battle {
         let replacement_pending = self.state.player.slot_active().is_none()
             || self.state.opponent.slot_active().is_none();
         let mut next = self.state.clone();
+        let mut rng = self.rng.clone();
 
         next.player.validate_action(player_action)?;
         next.opponent.validate_action(opponent_action)?;
@@ -70,12 +93,13 @@ impl Battle {
             && (matches!(player_action, Action::Move(_))
                 || matches!(opponent_action, Action::Move(_)))
         {
-            resolve_turn(&mut next, player_action, opponent_action)?;
+            resolve_turn(&mut next, player_action, opponent_action, &mut rng)?;
         }
 
         next.terminated =
             !next.player.has_available_selected() || !next.opponent.has_available_selected();
         self.state = next;
+        self.rng = rng;
         Ok(&self.state)
     }
 
@@ -87,6 +111,7 @@ impl Battle {
         opponent_roster: &[Pokemon; 6],
         action: Action,
         opponent_action: Action,
+        rng: &mut SmallRng,
     ) -> Result<(), ActionError> {
         let player_slot = state
             .player
@@ -108,6 +133,7 @@ impl Battle {
                 &mut state.opponent,
                 first,
                 second,
+                rng,
             )
             .map(|_| ()),
             (Action::Move(slot), Action::Switch(_)) => execute_move(
@@ -117,6 +143,7 @@ impl Battle {
                 &mut state.opponent,
                 slot,
                 false,
+                rng,
             )
             .map(|_| ()),
             (Action::Switch(_), Action::Move(slot)) => execute_move(
@@ -126,6 +153,7 @@ impl Battle {
                 &mut state.player,
                 slot,
                 false,
+                rng,
             )
             .map(|_| ()),
             _ => Err(ActionError::WrongPhase),
@@ -161,6 +189,7 @@ fn determine_turn_order(
     second: &Pokemon,
     first_slot: usize,
     second_slot: usize,
+    rng: &mut SmallRng,
 ) -> Result<TurnOrder, BattleError> {
     validate_move_index(first, first_slot)?;
     validate_move_index(second, second_slot)?;
@@ -171,7 +200,7 @@ fn determine_turn_order(
     Ok(match first_key.cmp(&second_key) {
         std::cmp::Ordering::Greater => TurnOrder::FirstPokemon,
         std::cmp::Ordering::Less => TurnOrder::SecondPokemon,
-        std::cmp::Ordering::Equal if rand::random() => TurnOrder::FirstPokemon,
+        std::cmp::Ordering::Equal if rng.random() => TurnOrder::FirstPokemon,
         std::cmp::Ordering::Equal => TurnOrder::SecondPokemon,
     })
 }
@@ -183,12 +212,13 @@ fn simulate_turn(
     second_team: &mut TeamState,
     first_move: usize,
     second_move: usize,
+    rng: &mut SmallRng,
 ) -> Result<TurnResult, ActionError> {
     if first_team.slot_active().is_none() || second_team.slot_active().is_none() {
         return Err(ActionError::Battle(BattleError::FaintedPokemonCannotBattle));
     }
 
-    let order = determine_turn_order(first, second, first_move, second_move)
+    let order = determine_turn_order(first, second, first_move, second_move, rng)
         .map_err(ActionError::Battle)?;
     let (faster, faster_team, faster_move, slower, slower_team, slower_move) = match order {
         TurnOrder::FirstPokemon => (
@@ -208,7 +238,15 @@ fn simulate_turn(
             first_move,
         ),
     };
-    let first = execute_move(faster, faster_team, slower, slower_team, faster_move, false)?;
+    let first = execute_move(
+        faster,
+        faster_team,
+        slower,
+        slower_team,
+        faster_move,
+        false,
+        rng,
+    )?;
     let second = if slower_team.slot_active().is_none() {
         None
     } else {
@@ -219,6 +257,7 @@ fn simulate_turn(
             faster_team,
             slower_move,
             is_protective_status_move(&faster.moves[faster_move]),
+            rng,
         )?)
     };
     Ok(TurnResult { first, second })
@@ -231,6 +270,7 @@ fn execute_move(
     defender_team: &mut TeamState,
     move_index: usize,
     defender_is_protected: bool,
+    rng: &mut SmallRng,
 ) -> Result<AttackResult, ActionError> {
     if attacker_team.slot_active().is_none() {
         return Err(ActionError::Battle(BattleError::FaintedPokemonCannotAttack));
@@ -247,7 +287,7 @@ fn execute_move(
             effectiveness: 1.0,
         }
     } else {
-        let result = calculate_damage(attacker, defender, selected_move, None)
+        let result = calculate_damage_with_rng(attacker, defender, selected_move, rng)
             .map_err(ActionError::Battle)?;
         defender_team
             .damage_active(u32::from(result.damage))
@@ -290,7 +330,7 @@ mod state_tests {
         let mut battle = Battle::new(initial.clone());
 
         assert_eq!(
-            battle.play_turn(Action::Switch(1), Action::Move(0), |next, _, _| {
+            battle.play_turn(Action::Switch(1), Action::Move(0), |next, _, _, _| {
                 next.player.damage_active(25).unwrap();
                 next.opponent = TeamState::new(
                     team([false; 4]).roster().clone(),
@@ -311,15 +351,23 @@ mod state_tests {
         let mut battle = Battle::new(state());
 
         assert_eq!(
-            battle.play_turn(Action::Switch(0), Action::Move(0), |_, _, _| unreachable!()),
+            battle.play_turn(
+                Action::Switch(0),
+                Action::Move(0),
+                |_, _, _, _| unreachable!()
+            ),
             Err(ActionError::InvalidSwitch)
         );
         assert_eq!(
-            battle.play_turn(Action::Move(0), Action::Move(1), |_, _, _| unreachable!()),
+            battle.play_turn(
+                Action::Move(0),
+                Action::Move(1),
+                |_, _, _, _| unreachable!()
+            ),
             Err(ActionError::UnavailableMove)
         );
         assert_eq!(
-            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _| Err(
+            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _, _| Err(
                 ActionError::InvalidSwitch
             )),
             Err(ActionError::InvalidSwitch)
@@ -329,7 +377,7 @@ mod state_tests {
             .play_turn(
                 Action::Move(1),
                 Action::Move(2),
-                |state, player, opponent| {
+                |state, player, opponent, _| {
                     assert_eq!((player, opponent), (Action::Move(1), Action::Move(2)));
 
                     state.opponent.damage_active(1_000).unwrap();
@@ -344,7 +392,11 @@ mod state_tests {
 
         assert!(state.terminated);
         assert_eq!(
-            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _| unreachable!()),
+            battle.play_turn(
+                Action::Move(0),
+                Action::Move(0),
+                |_, _, _, _| unreachable!()
+            ),
             Err(ActionError::BattleTerminated)
         );
     }
@@ -354,7 +406,7 @@ mod state_tests {
         let mut battle = Battle::new(state());
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.player.damage_active(1_000).unwrap();
                 Ok(())
             })
@@ -366,19 +418,23 @@ mod state_tests {
             vec![Action::Switch(1), Action::Switch(2)]
         );
         assert_eq!(
-            battle.play_turn(Action::Move(0), Action::Move(0), |_, _, _| unreachable!()),
+            battle.play_turn(
+                Action::Move(0),
+                Action::Move(0),
+                |_, _, _, _| unreachable!()
+            ),
             Err(ActionError::UnavailableMove)
         );
 
         let state = battle
-            .play_turn(Action::Switch(1), Action::Move(0), |_, _, _| {
+            .play_turn(Action::Switch(1), Action::Move(0), |_, _, _, _| {
                 panic!("forced replacements do not resolve moves")
             })
             .unwrap();
         assert_eq!(state.player.slot_active(), Some(1));
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1).unwrap();
                 Ok(())
             })
@@ -391,7 +447,7 @@ mod state_tests {
         let mut battle = Battle::new(state());
 
         let state = battle
-            .play_turn(Action::Switch(1), Action::Switch(1), |_, _, _| {
+            .play_turn(Action::Switch(1), Action::Switch(1), |_, _, _, _| {
                 panic!("switch-only turns have no moves to resolve")
             })
             .unwrap();
@@ -404,7 +460,7 @@ mod state_tests {
         let mut battle = Battle::new(state());
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
                 Ok(())
             })
@@ -412,14 +468,14 @@ mod state_tests {
         assert!(!state.terminated);
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Switch(1), |_, _, _| {
+            .play_turn(Action::Move(0), Action::Switch(1), |_, _, _, _| {
                 panic!("forced replacements do not resolve moves")
             })
             .unwrap();
         assert!(!state.terminated);
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
                 Ok(())
             })
@@ -427,14 +483,14 @@ mod state_tests {
         assert!(!state.terminated);
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Switch(2), |_, _, _| {
+            .play_turn(Action::Move(0), Action::Switch(2), |_, _, _, _| {
                 panic!("forced replacements do not resolve moves")
             })
             .unwrap();
         assert!(!state.terminated);
 
         let state = battle
-            .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
                 Ok(())
             })
@@ -581,6 +637,7 @@ mod resolution_tests {
             &mut team(&defender),
             0,
             false,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(result.damage, 0);
@@ -594,7 +651,8 @@ mod resolution_tests {
         let slower = dragonite();
         let faster = charizard();
 
-        let order = determine_turn_order(&slower, &faster, 0, 0).unwrap();
+        let order =
+            determine_turn_order(&slower, &faster, 0, 0, &mut SmallRng::seed_from_u64(0)).unwrap();
         let result = simulate_turn(
             &slower,
             &mut team(&slower),
@@ -602,6 +660,7 @@ mod resolution_tests {
             &mut team(&faster),
             0,
             0,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(order, TurnOrder::FirstPokemon);
@@ -613,7 +672,8 @@ mod resolution_tests {
         let slower = dragonite();
         let faster = charizard();
 
-        let order = determine_turn_order(&slower, &faster, 0, 3).unwrap();
+        let order =
+            determine_turn_order(&slower, &faster, 0, 3, &mut SmallRng::seed_from_u64(0)).unwrap();
         let result = simulate_turn(
             &slower,
             &mut team(&slower),
@@ -621,6 +681,7 @@ mod resolution_tests {
             &mut team(&faster),
             0,
             3,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(order, TurnOrder::SecondPokemon);
@@ -632,7 +693,8 @@ mod resolution_tests {
         let slower = venusaur();
         let faster = dragonite();
 
-        let order = determine_turn_order(&slower, &faster, 0, 3).unwrap();
+        let order =
+            determine_turn_order(&slower, &faster, 0, 3, &mut SmallRng::seed_from_u64(0)).unwrap();
         let result = simulate_turn(
             &slower,
             &mut team(&slower),
@@ -640,6 +702,7 @@ mod resolution_tests {
             &mut team(&faster),
             0,
             3,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(order, TurnOrder::FirstPokemon);
@@ -662,6 +725,7 @@ mod resolution_tests {
             &mut defender_team,
             0,
             0,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(result.first.attacker, "Charizard");
@@ -680,6 +744,7 @@ mod resolution_tests {
             &mut team(&faster),
             1,
             0,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(result.first.attacker, "Charizard");
@@ -697,6 +762,7 @@ mod resolution_tests {
             &mut team(&defender),
             4,
             0,
+            &mut SmallRng::seed_from_u64(0),
         );
         assert_eq!(
             result,
@@ -720,6 +786,7 @@ mod resolution_tests {
             &mut team(&defender),
             0,
             0,
+            &mut SmallRng::seed_from_u64(0),
         );
         assert_eq!(
             result,
@@ -739,6 +806,7 @@ mod resolution_tests {
             &mut team(&attacker),
             3,
             0,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(result.first.move_name, "Protect");
@@ -768,6 +836,7 @@ mod resolution_tests {
             &mut defender_team,
             0,
             false,
+            &mut SmallRng::seed_from_u64(0),
         )
         .unwrap();
         assert_eq!(result.damage, 0);
