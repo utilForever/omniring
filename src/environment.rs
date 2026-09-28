@@ -290,8 +290,73 @@ mod tests {
 
     use super::{Environment, Observation};
     use crate::{
-        Action, ActionError, BattleState, PokemonState, TeamPreviewObservation, TeamState,
+        Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
+        TeamPreviewObservation, TeamState,
     };
+
+    #[test]
+    fn custom_events_are_forwarded_and_failed_steps_preserve_previous_events() {
+        let miss = BattleEvent::Miss {
+            side: BattleSide::Player,
+            slot: 0,
+            move_slot: 0,
+        };
+        let fail = Cell::new(false);
+
+        let mut environment = Environment::new_with_seed(
+            TeamPreviewObservation {
+                player: roster(100),
+                opponent: roster(100),
+            },
+            [0, 1, 2],
+            46,
+            |state, _, _, rng| {
+                if fail.get() {
+                    state.player.damage_active(50).unwrap();
+                    let _ = rng.random::<u64>();
+                    return Err(ActionError::InvalidSwitch);
+                }
+                Ok(vec![miss.clone()])
+            },
+        )
+        .unwrap();
+        environment
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        let first = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert_eq!(
+            first.events,
+            vec![
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Player,
+                    slot: 0,
+                    move_slot: 0
+                },
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Opponent,
+                    slot: 0,
+                    move_slot: 0
+                },
+                miss.clone(),
+            ]
+        );
+
+        let before = environment.battle.clone();
+
+        fail.set(true);
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Switch(1)),
+            Err(ActionError::InvalidSwitch)
+        );
+        assert_eq!(environment.battle, before);
+
+        fail.set(false);
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
+            first
+        );
+    }
 
     #[test]
     fn observation_snapshots_do_not_mutate_or_alias_battle_state() {
