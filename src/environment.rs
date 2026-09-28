@@ -1,7 +1,7 @@
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
-    Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
-    TeamPreviewObservation, TeamState, calculate_reward,
+    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleState, OpponentObservation,
+    PokemonState, TeamPreviewObservation, TeamState, calculate_reward,
 };
 use rand::{SeedableRng, rngs::SmallRng};
 
@@ -28,6 +28,8 @@ pub struct StepOutcome {
     pub observation: Observation,
     pub reward: f32,
     pub terminated: bool,
+    /// Only this step's events, in resolution order; empty for team selection.
+    pub events: Vec<BattleEvent>,
 }
 
 impl Environment<()> {
@@ -59,7 +61,12 @@ impl Environment<()> {
         opponent_selection: [usize; 3],
     ) -> Result<
         Environment<
-            impl FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
+            impl FnMut(
+                &mut BattleState,
+                Action,
+                Action,
+                &mut SmallRng,
+            ) -> Result<Vec<BattleEvent>, ActionError>,
         >,
         ActionError,
     > {
@@ -79,7 +86,12 @@ impl Environment<()> {
         seed: u64,
     ) -> Result<
         Environment<
-            impl FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
+            impl FnMut(
+                &mut BattleState,
+                Action,
+                Action,
+                &mut SmallRng,
+            ) -> Result<Vec<BattleEvent>, ActionError>,
         >,
         ActionError,
     > {
@@ -115,7 +127,12 @@ fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionErro
 
 impl<F> Environment<F>
 where
-    F: FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
+    F: FnMut(
+        &mut BattleState,
+        Action,
+        Action,
+        &mut SmallRng,
+    ) -> Result<Vec<BattleEvent>, ActionError>,
 {
     /// Creates an environment with a randomly chosen seed and a custom transition.
     /// The transition receives the battle's RNG as its fourth argument.
@@ -129,6 +146,9 @@ where
 
     /// Creates a seeded environment. Custom transitions must use the supplied RNG for
     /// random decisions; state captured by the callback is not reset or rolled back.
+    /// Return attack events in resolution order, or `Ok(Vec::new())` for none.
+    /// The battle adds move selections, action-driven switches, and completion; custom HP changes must
+    /// include their own damage/faint events. Events are trusted, not inferred from HP.
     pub fn new_with_seed(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
@@ -199,6 +219,7 @@ where
                 )?),
                 reward: 0.0,
                 terminated: false,
+                events: Vec::new(),
             });
         }
 
@@ -206,7 +227,9 @@ where
         let opponent_revealed = self.opponent_revealed;
         let outcome = (|| {
             let battle = self.battle.as_mut().unwrap();
-            let state = battle.play_turn(action, opponent_action, &mut self.transition)?;
+            battle.play_turn(action, opponent_action, &mut self.transition)?;
+
+            let state = battle.state();
 
             // A successful switch reveals its slot even if the incoming Pokemon fainted.
             if let Action::Switch(slot) = opponent_action {
@@ -221,6 +244,7 @@ where
                 observation: Observation::Battle(observation(state, self.opponent_revealed)?),
                 reward: calculate_reward(previous.state(), state),
                 terminated: state.terminated,
+                events: battle.events().to_vec(),
             })
         })();
 
@@ -293,7 +317,7 @@ mod tests {
             opponent: roster(100),
         };
 
-        assert!(Environment::new(preview.clone(), [0, 0, 1], |_, _, _, _| Ok(())).is_err());
+        assert!(Environment::new(preview.clone(), [0, 0, 1], |_, _, _, _| Ok(Vec::new())).is_err());
 
         let terminal = state([0; 3], true);
         let transitions = Cell::new(0);
@@ -302,7 +326,7 @@ mod tests {
                 assert_eq!((player, opponent), (Action::Move(0), Action::Move(0)));
                 transitions.set(transitions.get() + 1);
                 *state = terminal.clone();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
 
@@ -378,9 +402,9 @@ mod tests {
                             Some(1),
                         )
                         .unwrap();
-                        Ok(())
+                        Ok(Vec::new())
                     }
-                    _ => Ok(()),
+                    _ => Ok(Vec::new()),
                 }
             })
             .unwrap();
@@ -422,7 +446,7 @@ mod tests {
 
             transitions.set(transitions.get() + 1);
             state.opponent.damage_active(1_000).unwrap();
-            Ok(())
+            Ok(Vec::new())
         })
         .unwrap();
 

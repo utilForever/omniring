@@ -234,7 +234,9 @@ fn failed_core_turn_leaves_hp_unchanged_for_the_next_step() {
     );
 
     let retried = environment.step(Action::Move(3), Action::Move(0)).unwrap();
-    assert_eq!(retried, selected);
+    assert_eq!(retried.observation, selected.observation);
+    assert_eq!(retried.reward, selected.reward);
+    assert_eq!(retried.terminated, selected.terminated);
 }
 
 #[test]
@@ -343,10 +345,10 @@ fn only_equipped_move_slots_are_available_in_preview_and_battle() {
                 Err(ActionError::UnavailableMove)
             );
         }
-        assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
-            selected
-        );
+        let protected = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert_eq!(protected.observation, selected.observation);
+        assert_eq!(protected.reward, selected.reward);
+        assert_eq!(protected.terminated, selected.terminated);
         // Switch the opponent to its three-move reserve before testing its empty slot.
         let switched = environment
             .step(Action::Move(0), Action::Switch(5))
@@ -355,10 +357,10 @@ fn only_equipped_move_slots_are_available_in_preview_and_battle() {
             environment.step(Action::Move(0), Action::Move(3)),
             Err(ActionError::UnavailableMove)
         );
-        assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
-            switched
-        );
+        let protected = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert_eq!(protected.observation, switched.observation);
+        assert_eq!(protected.reward, switched.reward);
+        assert_eq!(protected.terminated, switched.terminated);
     }
 }
 
@@ -793,7 +795,7 @@ fn direct_battle_keeps_runtime_move_availability() {
     battle
         .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
             state.player = runtime_team(100_000, [true, false, true, true]);
-            Ok(())
+            Ok(Vec::new())
         })
         .unwrap();
 
