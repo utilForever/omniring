@@ -225,6 +225,7 @@ pub struct Move {
     pub r#type: PokemonType,
     pub category: MoveCategory,
     pub power: u16,
+    /// Hit chance in percent. `None` bypasses accuracy; values above 100 are capped at 100.
     pub accuracy: Option<u8>,
     pub priority: i8,
 }

@@ -169,6 +169,7 @@ pub struct AttackResult {
     pub damage: u16,
     pub effectiveness: f32,
     pub blocked: bool, // protect moves
+    pub missed: bool,
     pub defender_hp_after: u32,
 }
 
@@ -256,7 +257,9 @@ fn simulate_turn(
             faster,
             faster_team,
             slower_move,
-            is_protective_status_move(&faster.moves[faster_move]),
+            !first.missed
+                && !first.blocked
+                && is_protective_status_move(&faster.moves[faster_move]),
             rng,
         )?)
     };
@@ -281,7 +284,11 @@ fn execute_move(
     ))?;
     let target = defender_team.slot_active();
     let blocked = target.is_none() || (defender_is_protected && selected_move.power > 0);
-    let result = if blocked {
+    let missed = !blocked
+        && selected_move.accuracy.is_some_and(|accuracy| {
+            accuracy == 0 || (accuracy < 100 && rng.random_range(0..100_u8) >= accuracy)
+        });
+    let result = if blocked || missed {
         DamageResult {
             damage: 0,
             effectiveness: 1.0,
@@ -302,6 +309,7 @@ fn execute_move(
         damage: result.damage,
         effectiveness: result.effectiveness,
         blocked,
+        missed,
         defender_hp_after: target.map_or(0, |slot| defender_team.roster()[slot].hp_curr()),
     })
 }
@@ -528,6 +536,102 @@ mod resolution_tests {
     use crate::PokemonState;
     use crate::info::{Nature, PokemonType, StatPoints};
     use crate::pokedex::{build_pokemon_from_pokedex, find_pokemon};
+
+    #[test]
+    fn accuracy_checks_preserve_hp_and_consume_only_needed_random_draws() {
+        let defender = venusaur();
+        let mut saw_hit_and_miss = [false; 2];
+
+        for accuracy in [None, Some(0), Some(50), Some(100), Some(255)] {
+            for blocked in [false, true] {
+                for status in [false, true] {
+                    for seed in 0..16 {
+                        let mut attacker = charizard();
+                        attacker.moves[0].accuracy = accuracy;
+
+                        if status {
+                            attacker.moves[0].category = MoveCategory::Status;
+                            attacker.moves[0].power = 0;
+                        }
+
+                        let mut expected_rng = SmallRng::seed_from_u64(seed);
+                        let blocked = blocked && !status;
+                        let missed = !blocked
+                            && match accuracy {
+                                Some(0) => true,
+                                Some(50) => expected_rng.random_range(0..100_u8) >= 50,
+                                _ => false,
+                            };
+                        let damage = if missed || blocked {
+                            0
+                        } else {
+                            calculate_damage_with_rng(
+                                &attacker,
+                                &defender,
+                                &attacker.moves[0],
+                                &mut expected_rng,
+                            )
+                            .unwrap()
+                            .damage
+                        };
+                        let mut rng = SmallRng::seed_from_u64(seed);
+                        let mut target = team(&defender);
+                        let hp_before = target.roster()[0].hp_curr();
+                        let result = execute_move(
+                            &attacker,
+                            &team(&attacker),
+                            &defender,
+                            &mut target,
+                            0,
+                            blocked,
+                            &mut rng,
+                        )
+                        .unwrap();
+
+                        assert_eq!(
+                            (result.missed, result.blocked, result.damage),
+                            (missed, blocked, damage)
+                        );
+                        assert_eq!(
+                            result.defender_hp_after,
+                            hp_before.saturating_sub(u32::from(damage))
+                        );
+                        assert_eq!(target.roster()[0].hp_curr(), result.defender_hp_after);
+                        assert_eq!(rng, expected_rng);
+
+                        if accuracy == Some(50) && !blocked {
+                            saw_hit_and_miss[usize::from(missed)] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(saw_hit_and_miss, [true, true]);
+    }
+
+    #[test]
+    fn a_missed_protect_does_not_block_the_counterattack() {
+        let mut protector = charizard();
+        protector.moves[3].accuracy = Some(0);
+
+        let attacker = venusaur();
+        let result = simulate_turn(
+            &protector,
+            &mut team(&protector),
+            &attacker,
+            &mut team(&attacker),
+            3,
+            0,
+            &mut SmallRng::seed_from_u64(46),
+        )
+        .unwrap();
+        assert!(result.first.missed);
+
+        let second = result.second.unwrap();
+        assert!(!second.blocked);
+        assert!(second.damage > 0);
+    }
 
     fn team(pokemon: &Pokemon) -> TeamState {
         TeamState::new(
