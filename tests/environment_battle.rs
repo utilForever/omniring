@@ -64,6 +64,40 @@ fn switch_only_episode_stops_at_the_turn_limit() {
 }
 
 #[test]
+fn truncated_episode_replays_and_rejects_extra_actions() {
+    let mut replay = BattleReplay {
+        player: roster("Charizard"),
+        opponent: roster("Venusaur"),
+        opponent_selection: [0, 1, 2],
+        seed: 46,
+        actions: vec![(Action::SelectTeam([0, 1, 2]), Action::Move(0))],
+    };
+    replay.actions.extend((1..MAX_EPISODE_TURNS).map(|turn| {
+        let action = Action::Switch(turn % 2);
+        (action, action)
+    }));
+    assert_eq!(replay.run(), Err(ReplayError::Incomplete));
+
+    let last = Action::Switch(MAX_EPISODE_TURNS % 2);
+    replay.actions.push((last, last));
+
+    let outcomes = replay.run().unwrap();
+    assert_eq!(outcomes.len(), MAX_EPISODE_TURNS + 1);
+    assert!(outcomes.last().unwrap().truncated);
+    assert!(outcomes.iter().all(|outcome| !outcome.terminated));
+    assert_eq!(replay.run().unwrap(), outcomes);
+
+    replay.actions.push((Action::Move(0), Action::Move(0)));
+    assert_eq!(
+        replay.run(),
+        Err(ReplayError::InvalidAction {
+            step: MAX_EPISODE_TURNS + 1,
+            error: ActionError::EpisodeTruncated,
+        })
+    );
+}
+
+#[test]
 fn real_battles_run_to_win_or_loss_and_reset() {
     for player_wins in [true, false] {
         let strong = roster("Charizard");
