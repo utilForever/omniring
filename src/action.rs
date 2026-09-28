@@ -17,6 +17,8 @@ pub enum ActionError {
     InvalidSwitch,
     WrongPhase,
     BattleTerminated,
+    /// The environment reached its turn limit; reset before taking another action.
+    EpisodeTruncated,
     InvalidState(StateError),
     Battle(BattleError),
 }

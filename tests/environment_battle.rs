@@ -2,8 +2,66 @@ use omniring::info::{BattleError, Nature, Pokemon, StatPoints};
 use omniring::pokedex::build_pokemon_from_pokedex;
 use omniring::{
     Action, ActionError, Battle, BattleEvent, BattleObservation, BattleReplay, BattleSide,
-    BattleState, Environment, Observation, PokemonState, ReplayError, StateError, TeamState,
+    BattleState, Environment, MAX_EPISODE_TURNS, Observation, PokemonState, ReplayError,
+    StateError, TeamState,
 };
+
+#[test]
+fn switch_only_episode_stops_at_the_turn_limit() {
+    let mut environment =
+        Environment::from_rosters_with_seed(roster("Charizard"), roster("Venusaur"), [0, 1, 2], 46)
+            .unwrap();
+
+    for episode in 0..3 {
+        let selected = environment
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+        assert!(!selected.terminated && !selected.truncated);
+
+        let initial = battle_observation(selected.observation);
+
+        for turn in 1..=MAX_EPISODE_TURNS {
+            assert_eq!(
+                environment.step(Action::Move(4), Action::Move(0)),
+                Err(ActionError::UnavailableMove)
+            );
+
+            let action = Action::Switch(turn % 2);
+            let outcome = environment.step(action, action).unwrap();
+            assert!(!outcome.terminated);
+            assert_eq!(outcome.truncated, turn == MAX_EPISODE_TURNS);
+            assert_eq!(outcome.reward, 0.0);
+            assert!(
+                outcome
+                    .events
+                    .iter()
+                    .all(|event| matches!(event, BattleEvent::Switched { .. }))
+            );
+
+            let observation = battle_observation(outcome.observation);
+            assert!(!observation.terminated);
+            assert_eq!(observation.player.roster(), initial.player.roster());
+            assert_eq!(observation.opponent.roster(), initial.opponent.roster());
+        }
+
+        for action in [
+            Action::Switch(1),
+            Action::Move(0),
+            Action::SelectTeam([0, 1, 2]),
+        ] {
+            assert_eq!(
+                environment.step(action, Action::Switch(1)),
+                Err(ActionError::EpisodeTruncated)
+            );
+        }
+
+        if episode == 0 {
+            environment.reset();
+        } else {
+            environment.reset_with_seed(46);
+        }
+    }
+}
 
 #[test]
 fn real_battles_run_to_win_or_loss_and_reset() {
@@ -84,6 +142,7 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 
             reward += outcome.reward;
             assert_eq!(outcome.terminated, turn == 2);
+            assert!(!outcome.truncated);
 
             let observation = battle_observation(outcome.observation);
             assert_eq!(observation.terminated, outcome.terminated);
