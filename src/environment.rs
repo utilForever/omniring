@@ -239,7 +239,31 @@ where
         observation(player, opponent, revealed, state.terminated).map(Observation::Battle)
     }
 
+    /// Returns ordered selections in preview, or the requested Trainer's battle actions.
+    /// Preview selections exclude fainted leads.
+    /// Either Trainer can submit a preview selection through `step`.
+    /// Terminated or truncated episodes have no legal actions.
+    pub fn legal_actions(&self, side: BattleSide) -> Vec<Action> {
+        match &self.battle {
+            None => {
+                let roster = match side {
+                    BattleSide::Player => &self.preview.player,
+                    BattleSide::Opponent => &self.preview.opponent,
+                };
+
+                self.preview.legal_player_actions().into_iter().filter(|action| {
+                    matches!(action, Action::SelectTeam([lead, _, _]) if roster[*lead].hp_curr() > 0)
+                }).collect()
+            }
+            Some(_) if self.elapsed_turns >= MAX_EPISODE_TURNS => Vec::new(),
+            Some(battle) => battle.state().legal_actions(side),
+        }
+    }
+
     /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
+    /// During preview, an opponent `SelectTeam` overrides the constructor's default
+    /// for this episode. For compatibility, opponent `Move`/`Switch` inputs keep that default.
+    /// Both selections are validated before the battle or reveal history changes.
     /// After truncation, returns `ActionError::EpisodeTruncated` until reset.
     pub fn step(
         &mut self,
@@ -253,7 +277,12 @@ where
             self.preview.validate_player_action(action)?;
 
             let player = selected_team(self.preview.player.clone(), selection)?;
-            let opponent = self.opponent.clone();
+            let opponent = if let Action::SelectTeam(selection) = opponent_action {
+                self.preview.validate_player_action(opponent_action)?;
+                selected_team(self.preview.opponent.clone(), selection)?
+            } else {
+                self.opponent.clone()
+            };
 
             self.player_revealed[player.slot_active().unwrap()] = true;
             self.opponent_revealed[opponent.slot_active().unwrap()] = true;
@@ -475,6 +504,111 @@ mod tests {
             expected
         );
         assert_eq!(original, before);
+    }
+
+    #[test]
+    fn preview_selections_are_validated_atomically_and_reset_keeps_the_default() {
+        let mut player_roster = roster(100);
+        player_roster[4] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let mut opponent = roster(100);
+        opponent[5] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let mut environment = Environment::new_with_seed(
+            TeamPreviewObservation {
+                player: player_roster,
+                opponent,
+            },
+            [0, 1, 2],
+            46,
+            |_, _, _, _| Ok(Vec::new()),
+        )
+        .unwrap();
+        let preview = environment.observation(BattleSide::Player).unwrap();
+        let reverse = environment.observation(BattleSide::Opponent).unwrap();
+        let rng = environment.rng.clone();
+        let player = Action::SelectTeam([0, 1, 2]);
+
+        for (side, fainted_lead) in [(BattleSide::Player, 4), (BattleSide::Opponent, 5)] {
+            let actions = environment.legal_actions(side);
+
+            assert_eq!(actions.len(), 100);
+            assert!(actions.iter().all(|action| matches!(action,
+                Action::SelectTeam([lead, _, _]) if *lead != fainted_lead
+            )));
+
+            // Every advertised action must execute for its requested Trainer.
+            for action in actions {
+                let (player, opponent) = match side {
+                    BattleSide::Player => (action, Action::SelectTeam([0, 1, 2])),
+                    BattleSide::Opponent => (player, action),
+                };
+
+                environment.step(player, opponent).unwrap();
+                environment.reset();
+            }
+        }
+
+        for (player, opponent) in [
+            (player, Action::SelectTeam([0, 0, 1])),
+            (player, Action::SelectTeam([0, 1, 6])),
+            (player, Action::SelectTeam([5, 4, 3])),
+            (Action::SelectTeam([0, 0, 1]), Action::SelectTeam([4, 3, 2])),
+        ] {
+            assert_eq!(
+                environment.step(player, opponent),
+                Err(ActionError::InvalidTeamSelection)
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Player).unwrap(),
+                preview
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Opponent).unwrap(),
+                reverse
+            );
+            assert_eq!(environment.rng, rng);
+            assert_eq!(environment.player_revealed, [false; 6]);
+            assert_eq!(environment.opponent_revealed, [false; 6]);
+        }
+
+        for fallback in [Action::Move(0), Action::Switch(0)] {
+            environment
+                .step(player, Action::SelectTeam([4, 3, 2]))
+                .unwrap();
+
+            let Observation::Battle(view) = environment.observation(BattleSide::Opponent).unwrap()
+            else {
+                panic!("expected battle")
+            };
+
+            assert_eq!(
+                view.player.selected(),
+                &[false, false, true, true, true, false]
+            );
+            assert_eq!(view.player.slot_active(), Some(4));
+
+            if matches!(fallback, Action::Move(_)) {
+                environment.reset();
+            } else {
+                environment.reset_with_seed(46);
+            }
+
+            environment.step(player, fallback).unwrap();
+
+            let Observation::Battle(view) = environment.observation(BattleSide::Opponent).unwrap()
+            else {
+                panic!("expected battle")
+            };
+
+            assert_eq!(
+                view.player.selected(),
+                &[true, true, true, false, false, false]
+            );
+            assert_eq!(view.player.slot_active(), Some(0));
+
+            environment.reset();
+        }
     }
 
     #[test]
@@ -723,6 +857,13 @@ mod tests {
             assert!(!outcome.truncated);
             assert!((outcome.reward - reward).abs() < 1e-6);
             assert!((outcome.reward_for(BattleSide::Opponent) + reward).abs() < 1e-6);
+
+            for side in [BattleSide::Player, BattleSide::Opponent] {
+                assert!(environment.legal_actions(side).is_empty());
+                assert!(
+                    matches!(environment.observation(side).unwrap(), Observation::Battle(view) if view.terminated)
+                );
+            }
 
             assert_eq!(
                 outcome.events.last(),
