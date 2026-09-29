@@ -60,15 +60,19 @@ impl Environment<()> {
     /// `reset` restores the supplied HP and returns to team preview, continuing the random stream.
     ///
     /// ```
-    /// use omniring::{Action, ActionError, Environment};
+    /// use omniring::{Action, ActionError, BattleSide, Environment};
     /// use omniring::info::Pokemon;
     ///
     /// # fn episode(player: [Pokemon; 6], opponent: [Pokemon; 6]) -> Result<(), ActionError> {
     /// let mut env = Environment::from_rosters(player, opponent, [0, 1, 2])?;
     /// let preview = env.reset();
-    /// // During preview, the opponent action is ignored: its team was selected above.
-    /// env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
-    /// let turn = env.step(Action::Move(0), Action::Move(0))?;
+    /// // Either Trainer can select a team during preview.
+    /// env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([5, 4, 3]))?;
+    /// let opponent_view = env.observation(BattleSide::Opponent)?;
+    /// let player_action = env.legal_actions(BattleSide::Player)[0];
+    /// let opponent_action = env.legal_actions(BattleSide::Opponent)[0];
+    /// let turn = env.step(player_action, opponent_action)?;
+    /// assert_eq!(turn.reward_for(BattleSide::Opponent), -turn.reward);
     /// // Use turn.observation and turn.reward for training.
     /// // End the episode when turn.terminated || turn.truncated.
     /// # Ok(())
