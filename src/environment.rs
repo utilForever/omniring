@@ -1,7 +1,7 @@
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
-    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleState, OpponentObservation,
-    PokemonState, TeamPreviewObservation, TeamState, calculate_reward,
+    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleSide, BattleState,
+    OpponentObservation, PokemonState, TeamPreviewObservation, TeamState, calculate_reward,
 };
 use rand::{SeedableRng, rngs::SmallRng};
 
@@ -24,6 +24,7 @@ pub struct Environment<F> {
     battle: Option<Battle>,
     // Used during preview; the active battle owns and advances the stream after selection.
     rng: SmallRng,
+    player_revealed: [bool; 6],
     opponent_revealed: [bool; 6],
     elapsed_turns: usize,
     transition: F,
@@ -31,7 +32,9 @@ pub struct Environment<F> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StepOutcome {
+    /// Observation from `BattleSide::Player`'s perspective.
     pub observation: Observation,
+    /// Zero-sum reward from `BattleSide::Player`'s perspective.
     pub reward: f32,
     pub terminated: bool,
     /// The turn limit was reached without a terminal battle result.
@@ -39,6 +42,16 @@ pub struct StepOutcome {
     pub truncated: bool,
     /// Only this step's events, in resolution order; empty for team selection.
     pub events: Vec<BattleEvent>,
+}
+
+impl StepOutcome {
+    /// Returns this step's zero-sum reward from the requested Trainer's perspective.
+    pub fn reward_for(&self, side: BattleSide) -> f32 {
+        match side {
+            BattleSide::Player => self.reward,
+            BattleSide::Opponent => -self.reward,
+        }
+    }
 }
 
 impl Environment<()> {
@@ -174,6 +187,7 @@ where
             opponent,
             battle: None,
             rng: SmallRng::seed_from_u64(seed),
+            player_revealed: [false; 6],
             opponent_revealed: [false; 6],
             elapsed_turns: 0,
             transition,
@@ -186,6 +200,7 @@ where
             self.rng = battle.rng;
         }
 
+        self.player_revealed = [false; 6];
         self.opponent_revealed = [false; 6];
         self.elapsed_turns = 0;
 
@@ -198,6 +213,30 @@ where
         let preview = self.reset();
         self.rng = SmallRng::seed_from_u64(seed);
         preview
+    }
+
+    /// Returns an independent snapshot with `player` referring to the requested Trainer.
+    /// Only opposing slots that have entered battle are revealed as selected.
+    /// This borrows the canonical state and does not advance the battle or its RNG.
+    pub fn observation(&self, side: BattleSide) -> Result<Observation, ActionError> {
+        let Some(battle) = &self.battle else {
+            let (player, opponent) = match side {
+                BattleSide::Player => (&self.preview.player, &self.preview.opponent),
+                BattleSide::Opponent => (&self.preview.opponent, &self.preview.player),
+            };
+
+            return Ok(Observation::TeamPreview(TeamPreviewObservation {
+                player: player.clone(),
+                opponent: opponent.clone(),
+            }));
+        };
+        let state = battle.state();
+        let (player, opponent, revealed) = match side {
+            BattleSide::Player => (&state.player, &state.opponent, self.opponent_revealed),
+            BattleSide::Opponent => (&state.opponent, &state.player, self.player_revealed),
+        };
+
+        observation(player, opponent, revealed, state.terminated).map(Observation::Battle)
     }
 
     /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
@@ -216,6 +255,7 @@ where
             let player = selected_team(self.preview.player.clone(), selection)?;
             let opponent = self.opponent.clone();
 
+            self.player_revealed[player.slot_active().unwrap()] = true;
             self.opponent_revealed[opponent.slot_active().unwrap()] = true;
 
             let battle = self.battle.insert(Battle::with_rng(
@@ -229,8 +269,10 @@ where
 
             return Ok(StepOutcome {
                 observation: Observation::Battle(observation(
-                    battle.state(),
+                    &battle.state().player,
+                    &battle.state().opponent,
                     self.opponent_revealed,
+                    false,
                 )?),
                 reward: 0.0,
                 terminated: false,
@@ -250,6 +292,7 @@ where
                 previous.state().player.slot_active().is_some()
                     && previous.state().opponent.slot_active().is_some(),
             );
+        let player_revealed = self.player_revealed;
         let opponent_revealed = self.opponent_revealed;
         let outcome = (|| {
             let battle = self.battle.as_mut().unwrap();
@@ -257,17 +300,40 @@ where
 
             let state = battle.state();
 
-            // A successful switch reveals its slot even if the incoming Pokemon fainted.
-            if let Action::Switch(slot) = opponent_action {
-                self.opponent_revealed[slot] = true;
-            }
+            for (team, action, revealed) in [
+                (&state.player, action, &mut self.player_revealed),
+                (
+                    &state.opponent,
+                    opponent_action,
+                    &mut self.opponent_revealed,
+                ),
+            ] {
+                // A successful switch reveals its slot even if the incoming Pokemon fainted.
+                if let Action::Switch(slot) = action {
+                    revealed[slot] = true;
+                }
 
-            if let Some(active) = state.opponent.slot_active() {
-                self.opponent_revealed[active] = true;
+                if let Some(active) = team.slot_active() {
+                    revealed[active] = true;
+                }
+
+                // A custom transition must leave both perspectives valid.
+                if revealed
+                    .iter()
+                    .zip(team.selected())
+                    .any(|(&seen, &selected)| seen && !selected)
+                {
+                    return Err(ActionError::InvalidTeamSelection);
+                }
             }
 
             Ok(StepOutcome {
-                observation: Observation::Battle(observation(state, self.opponent_revealed)?),
+                observation: Observation::Battle(observation(
+                    &state.player,
+                    &state.opponent,
+                    self.opponent_revealed,
+                    state.terminated,
+                )?),
                 reward: calculate_reward(previous.state(), state),
                 terminated: state.terminated,
                 truncated: !state.terminated && elapsed_turns >= MAX_EPISODE_TURNS,
@@ -277,6 +343,7 @@ where
 
         if outcome.is_err() {
             self.battle = Some(previous);
+            self.player_revealed = player_revealed;
             self.opponent_revealed = opponent_revealed;
         } else {
             self.elapsed_turns = elapsed_turns;
@@ -301,14 +368,16 @@ fn selected_team(
 }
 
 fn observation(
-    state: &BattleState,
+    player: &TeamState,
+    opponent: &TeamState,
     opponent_revealed: [bool; 6],
+    terminated: bool,
 ) -> Result<BattleObservation, ActionError> {
     Ok(BattleObservation {
-        player: state.player.clone(),
-        opponent: OpponentObservation::new(&state.opponent, opponent_revealed)
+        player: player.clone(),
+        opponent: OpponentObservation::new(opponent, opponent_revealed)
             .map_err(|_| ActionError::InvalidTeamSelection)?,
-        terminated: state.terminated,
+        terminated,
     })
 }
 
@@ -392,7 +461,8 @@ mod tests {
         let original = state([100; 3], false);
         let before = original.clone();
         let revealed = [true, false, false, false, false, false];
-        let expected = super::observation(&original, revealed).unwrap();
+        let expected =
+            super::observation(&original.player, &original.opponent, revealed, false).unwrap();
 
         let mut snapshot = expected.clone();
         snapshot.player.damage_active(50).unwrap();
@@ -400,7 +470,10 @@ mod tests {
         snapshot.terminated = true;
 
         assert_ne!(snapshot, expected);
-        assert_eq!(super::observation(&original, revealed).unwrap(), expected);
+        assert_eq!(
+            super::observation(&original.player, &original.opponent, revealed, false).unwrap(),
+            expected
+        );
         assert_eq!(original, before);
     }
 
@@ -489,8 +562,14 @@ mod tests {
                         state.terminated = true;
                         Err(ActionError::InvalidSwitch)
                     }
-                    1 => {
-                        state.opponent = TeamState::new(
+                    1 | 2 => {
+                        let team = if turn == 1 {
+                            &mut state.opponent
+                        } else {
+                            &mut state.player
+                        };
+
+                        *team = TeamState::new(
                             roster(100),
                             [false, true, true, true, false, false],
                             Some(1),
@@ -507,23 +586,42 @@ mod tests {
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
         let before = environment.battle.clone();
+        let reverse_before = environment.observation(BattleSide::Opponent).unwrap();
+
         assert_eq!(
             environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidSwitch)
         );
         assert_eq!(environment.battle, before);
         assert_eq!(
+            environment.observation(BattleSide::Opponent).unwrap(),
+            reverse_before
+        );
+        assert_eq!(
             environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidTeamSelection)
         );
         assert_eq!(environment.battle, before);
+        assert_eq!(
+            environment.observation(BattleSide::Opponent).unwrap(),
+            reverse_before
+        );
+        assert_eq!(
+            environment.step(Action::Switch(1), Action::Move(0)),
+            Err(ActionError::InvalidTeamSelection)
+        );
+        assert_eq!(environment.battle, before);
+        assert_eq!(
+            environment.observation(BattleSide::Opponent).unwrap(),
+            reverse_before
+        );
 
         let retried = environment.step(Action::Move(0), Action::Move(0)).unwrap();
 
         assert_eq!(retried.observation, selected.observation);
         assert_eq!(retried.reward, 0.0);
         assert!(!retried.terminated);
-        assert_eq!(transitions.get(), 3);
+        assert_eq!(transitions.get(), 4);
 
         // Neither a failed transition nor a failed observation consumed a turn.
         for turn in 2..=MAX_EPISODE_TURNS {
@@ -624,6 +722,8 @@ mod tests {
             assert!(outcome.terminated);
             assert!(!outcome.truncated);
             assert!((outcome.reward - reward).abs() < 1e-6);
+            assert!((outcome.reward_for(BattleSide::Opponent) + reward).abs() < 1e-6);
+
             assert_eq!(
                 outcome.events.last(),
                 Some(&BattleEvent::BattleCompleted { winner })
