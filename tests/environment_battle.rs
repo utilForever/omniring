@@ -7,6 +7,157 @@ use omniring::{
 };
 
 #[test]
+fn either_trainer_can_query_its_view_without_changing_the_seeded_battle() {
+    let player = roster("Charizard");
+    let opponent = roster("Venusaur").map(|mut pokemon| {
+        pokemon.moves.truncate(1);
+        pokemon
+    });
+
+    let mut environment =
+        Environment::from_rosters_with_seed(player.clone(), opponent.clone(), [0, 1, 2], 46)
+            .unwrap();
+    let mut control = Environment::from_rosters_with_seed(player, opponent, [5, 2, 0], 46).unwrap();
+
+    let preview = environment.observation(BattleSide::Player).unwrap();
+    let reverse_preview = environment.observation(BattleSide::Opponent).unwrap();
+
+    let Observation::TeamPreview(forward) = &preview else {
+        panic!("expected preview")
+    };
+    let Observation::TeamPreview(reverse) = &reverse_preview else {
+        panic!("expected preview")
+    };
+
+    assert_eq!(forward.player, reverse.opponent);
+    assert_eq!(forward.opponent, reverse.player);
+
+    for side in [BattleSide::Player, BattleSide::Opponent] {
+        let actions = environment.legal_actions(side);
+
+        assert_eq!(actions.len(), 120);
+        assert_eq!(actions.first(), Some(&Action::SelectTeam([0, 1, 2])));
+        assert_eq!(actions.last(), Some(&Action::SelectTeam([5, 4, 3])));
+    }
+
+    for episode in 0..2 {
+        let selected = environment
+            .step(Action::SelectTeam([4, 1, 3]), Action::SelectTeam([5, 2, 0]))
+            .unwrap();
+
+        assert_eq!(
+            selected,
+            control
+                .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
+                .unwrap()
+        );
+        assert_eq!(selected.reward_for(BattleSide::Opponent), 0.0);
+
+        let initial = battle_observation(selected.observation);
+        let mut reverse =
+            battle_observation(environment.observation(BattleSide::Opponent).unwrap());
+
+        assert_eq!(
+            reverse.player.selected(),
+            &[true, false, true, false, false, true]
+        );
+        assert_eq!(reverse.player.slot_active(), Some(5));
+        assert_eq!(
+            initial.opponent.selection_revealed(),
+            &[false, false, false, false, false, true]
+        );
+        assert_eq!(
+            reverse.opponent.selection_revealed(),
+            &[false, false, false, false, true, false]
+        );
+        assert_eq!(reverse.player.roster(), initial.opponent.roster());
+        assert_eq!(reverse.opponent.roster(), initial.player.roster());
+        assert_eq!(
+            environment.legal_actions(BattleSide::Player),
+            vec![
+                Action::Move(0),
+                Action::Move(1),
+                Action::Move(2),
+                Action::Move(3),
+                Action::Switch(1),
+                Action::Switch(3),
+            ]
+        );
+        assert_eq!(
+            environment.legal_actions(BattleSide::Opponent),
+            vec![Action::Move(0), Action::Switch(0), Action::Switch(2),]
+        );
+
+        // Returned snapshots cannot mutate the canonical state or reveal the other reserves.
+        reverse.player.damage_active(1).unwrap();
+        reverse.player.switch_to(2).unwrap();
+
+        for actions in [
+            (Action::Switch(0), Action::Move(0)),
+            (Action::Move(0), Action::Switch(1)),
+        ] {
+            assert_eq!(
+                environment.step(actions.0, actions.1),
+                Err(ActionError::InvalidSwitch)
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Player).unwrap(),
+                Observation::Battle(initial.clone())
+            );
+        }
+
+        for (player_action, opponent_action) in [
+            (Action::Switch(1), Action::Switch(2)),
+            (Action::Move(0), Action::Move(0)),
+        ] {
+            let outcome = environment.step(player_action, opponent_action).unwrap();
+
+            assert_eq!(
+                outcome,
+                control.step(player_action, opponent_action).unwrap()
+            );
+            assert_eq!(outcome.reward_for(BattleSide::Player), outcome.reward);
+            assert_eq!(outcome.reward_for(BattleSide::Opponent), -outcome.reward);
+            assert_eq!(
+                environment.observation(BattleSide::Player).unwrap(),
+                outcome.observation
+            );
+
+            let forward = battle_observation(outcome.observation);
+            let reverse =
+                battle_observation(environment.observation(BattleSide::Opponent).unwrap());
+
+            assert_eq!(
+                forward.opponent.selection_revealed(),
+                &[false, false, true, false, false, true]
+            );
+            assert_eq!(
+                reverse.opponent.selection_revealed(),
+                &[false, true, false, false, true, false]
+            );
+            assert_eq!(reverse.player.roster(), forward.opponent.roster());
+            assert_eq!(reverse.opponent.roster(), forward.player.roster());
+        }
+
+        if episode == 0 {
+            environment.reset_with_seed(46);
+            control.reset_with_seed(46);
+        } else {
+            environment.reset();
+        }
+
+        assert_eq!(
+            environment.observation(BattleSide::Player).unwrap(),
+            preview
+        );
+        assert_eq!(
+            environment.observation(BattleSide::Opponent).unwrap(),
+            reverse_preview
+        );
+    }
+}
+
+#[test]
 fn switch_only_episode_stops_at_the_turn_limit() {
     let mut environment =
         Environment::from_rosters_with_seed(roster("Charizard"), roster("Venusaur"), [0, 1, 2], 46)
@@ -31,6 +182,15 @@ fn switch_only_episode_stops_at_the_turn_limit() {
             assert!(!outcome.terminated);
             assert_eq!(outcome.truncated, turn == MAX_EPISODE_TURNS);
             assert_eq!(outcome.reward, 0.0);
+            assert_eq!(outcome.reward_for(BattleSide::Opponent), 0.0);
+
+            for side in [BattleSide::Player, BattleSide::Opponent] {
+                assert_eq!(
+                    environment.legal_actions(side).is_empty(),
+                    outcome.truncated
+                );
+            }
+
             assert!(
                 outcome
                     .events
@@ -599,6 +759,64 @@ fn reveals_an_opponent_that_faints_on_switch_in() {
 }
 
 #[test]
+fn either_view_reveals_a_switch_in_that_faints_and_lists_only_legal_replacements() {
+    for weak_side in [BattleSide::Player, BattleSide::Opponent] {
+        let strong = roster("Charizard");
+
+        let mut weak = roster("Venusaur");
+        weak[1].current_hp = 1;
+
+        let (player, opponent, viewer, actions, replacement) = match weak_side {
+            BattleSide::Player => (
+                weak,
+                strong,
+                BattleSide::Opponent,
+                (Action::Switch(1), Action::Move(0)),
+                (Action::Switch(2), Action::Move(0)),
+            ),
+            BattleSide::Opponent => (
+                strong,
+                weak,
+                BattleSide::Player,
+                (Action::Move(0), Action::Switch(1)),
+                (Action::Move(0), Action::Switch(2)),
+            ),
+        };
+
+        let mut environment =
+            Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
+        environment
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        let outcome = environment.step(actions.0, actions.1).unwrap();
+        assert!(outcome.reward_for(weak_side) < 0.0);
+        assert!(outcome.reward_for(viewer) > 0.0);
+
+        let view = battle_observation(environment.observation(viewer).unwrap());
+        assert_eq!(view.opponent.slot_active(), None);
+        assert_eq!(
+            view.opponent.selection_revealed(),
+            &[true, true, false, false, false, false]
+        );
+        assert_eq!(
+            environment.legal_actions(weak_side),
+            vec![Action::Switch(0), Action::Switch(2)]
+        );
+
+        let outcome = environment.step(replacement.0, replacement.1).unwrap();
+        assert_eq!(outcome.reward_for(weak_side), 0.0);
+
+        let view = battle_observation(environment.observation(viewer).unwrap());
+        assert_eq!(view.opponent.slot_active(), Some(2));
+        assert_eq!(
+            view.opponent.selection_revealed(),
+            &[true, true, true, false, false, false]
+        );
+    }
+}
+
+#[test]
 fn rejects_invalid_hp_in_either_roster() {
     for invalid_player in [true, false] {
         for (hp, max_hp) in [(0, 0), (101, 100)] {
@@ -842,6 +1060,13 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
         // Compare every observation, reward, event, and termination flag.
         assert_eq!(replay.run().unwrap(), expected);
         assert_eq!(replay.run().unwrap(), expected);
+
+        // Explicit preview choices override the constructor default in replays too.
+        replay.actions[0].1 = Action::SelectTeam(opponent_selection);
+        replay.opponent_selection = [0, 1, 2];
+        assert_eq!(replay.run().unwrap(), expected);
+
+        replay.opponent_selection = opponent_selection;
         assert_eq!(replay.player, initial_player);
         assert_eq!(replay.opponent, initial_opponent);
 
@@ -870,6 +1095,14 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
             (
                 0,
                 (Action::SelectTeam([0, 0, 1]), Action::Move(0)),
+                ActionError::InvalidTeamSelection,
+            ),
+            (
+                0,
+                (
+                    Action::SelectTeam(player_selection),
+                    Action::SelectTeam([0, 0, 1]),
+                ),
                 ActionError::InvalidTeamSelection,
             ),
             (

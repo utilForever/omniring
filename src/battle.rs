@@ -148,8 +148,8 @@ impl Battle {
         let mut rng = self.rng.clone();
         let mut events = Vec::new();
 
-        next.player.validate_action(player_action)?;
-        next.opponent.validate_action(opponent_action)?;
+        next.validate_action(BattleSide::Player, player_action)?;
+        next.validate_action(BattleSide::Opponent, opponent_action)?;
 
         if !replacement_pending {
             for (side, team, action) in [

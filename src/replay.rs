@@ -8,11 +8,12 @@ use crate::{Action, ActionError, Environment, StepOutcome};
 pub struct BattleReplay {
     pub player: [Pokemon; 6],
     pub opponent: [Pokemon; 6],
+    /// Default opponent selection; an explicit preview `SelectTeam` overrides it.
     pub opponent_selection: [usize; 3],
     pub seed: u64,
     /// Ordered (player, opponent) actions, including team selection and forced replacements.
-    /// The first player action must select a team; its opponent action is ignored,
-    /// just as it is in `Environment::step`.
+    /// The first player action must select a team. An opponent `SelectTeam` is applied;
+    /// `Move`/`Switch` keep `opponent_selection`, as in `Environment::step`.
     pub actions: Vec<(Action, Action)>,
 }
 
