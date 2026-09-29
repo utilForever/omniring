@@ -1,3 +1,4 @@
+use crate::BattleSide;
 use crate::info::BattleError;
 use crate::state::{BattleState, StateError, TeamPreviewObservation, TeamState};
 
@@ -26,15 +27,24 @@ pub enum ActionError {
 impl BattleState {
     /// Returns player actions in stable move-slot, then roster-slot order.
     pub fn legal_player_actions(&self) -> Vec<Action> {
+        self.legal_actions(BattleSide::Player)
+    }
+
+    /// Returns the requested Trainer's actions in move-slot, then roster-slot order.
+    pub fn legal_actions(&self, side: BattleSide) -> Vec<Action> {
         if self.terminated {
             return Vec::new();
         }
 
+        let team = match side {
+            BattleSide::Player => &self.player,
+            BattleSide::Opponent => &self.opponent,
+        };
         let mut actions = Vec::new();
 
-        if let Some(active) = self.player.slot_active() {
+        if let Some(active) = team.slot_active() {
             actions.extend(
-                self.player.roster()[active]
+                team.roster()[active]
                     .move_availability
                     .iter()
                     .enumerate()
@@ -42,21 +52,27 @@ impl BattleState {
             );
         }
 
-        actions.extend((0..6).filter_map(|slot| {
-            (self.player.selected()[slot]
-                && self.player.slot_active() != Some(slot)
-                && self.player.roster()[slot].hp_curr() > 0)
-                .then_some(Action::Switch(slot))
-        }));
+        actions.extend(
+            (0..6).filter_map(|slot| team.can_switch_to(slot).then_some(Action::Switch(slot))),
+        );
         actions
     }
 
     pub fn validate_player_action(&self, action: Action) -> Result<(), ActionError> {
+        self.validate_action(BattleSide::Player, action)
+    }
+
+    /// Validates either Trainer's action using the same rules as turn resolution.
+    pub fn validate_action(&self, side: BattleSide, action: Action) -> Result<(), ActionError> {
         if self.terminated {
             return Err(ActionError::BattleTerminated);
         }
 
-        self.player.validate_action(action)
+        match side {
+            BattleSide::Player => &self.player,
+            BattleSide::Opponent => &self.opponent,
+        }
+        .validate_action(action)
     }
 }
 
@@ -115,6 +131,7 @@ impl TeamPreviewObservation {
 #[cfg(test)]
 mod tests {
     use super::{Action, ActionError};
+    use crate::BattleSide;
     use crate::state::{BattleState, PokemonState, TeamPreviewObservation, TeamState};
 
     #[test]
@@ -198,12 +215,49 @@ mod tests {
             Err(ActionError::WrongPhase)
         );
         assert_eq!(state, unchanged);
+        // The other Trainer follows the same slot validation without a swapped state.
+        assert_eq!(
+            state.legal_actions(BattleSide::Opponent),
+            vec![
+                Action::Move(0),
+                Action::Move(1),
+                Action::Move(2),
+                Action::Move(3),
+                Action::Switch(1),
+                Action::Switch(2),
+            ]
+        );
+
+        for side in [BattleSide::Player, BattleSide::Opponent] {
+            for action in state.legal_actions(side) {
+                assert_eq!(state.validate_action(side, action), Ok(()));
+            }
+
+            assert_eq!(
+                state.validate_action(side, Action::Move(4)),
+                Err(ActionError::UnavailableMove)
+            );
+            assert_eq!(
+                state.validate_action(side, Action::Switch(6)),
+                Err(ActionError::InvalidSwitch)
+            );
+            assert_eq!(
+                state.validate_action(side, Action::SelectTeam([0, 1, 2])),
+                Err(ActionError::WrongPhase)
+            );
+        }
 
         let mut terminated = state.clone();
         terminated.terminated = true;
+
         assert!(terminated.legal_player_actions().is_empty());
         assert_eq!(
             terminated.validate_player_action(Action::Move(0)),
+            Err(ActionError::BattleTerminated)
+        );
+        assert!(terminated.legal_actions(BattleSide::Opponent).is_empty());
+        assert_eq!(
+            terminated.validate_action(BattleSide::Opponent, Action::Move(0)),
             Err(ActionError::BattleTerminated)
         );
 
