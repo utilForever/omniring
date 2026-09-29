@@ -1,8 +1,8 @@
 use omniring::info::{BattleError, Nature, Pokemon, StatPoints};
 use omniring::pokedex::build_pokemon_from_pokedex;
 use omniring::{
-    Action, ActionError, Battle, BattleObservation, BattleReplay, BattleState, Environment,
-    Observation, PokemonState, ReplayError, StateError, TeamState,
+    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleReplay, BattleSide,
+    BattleState, Environment, Observation, PokemonState, ReplayError, StateError, TeamState,
 };
 
 #[test]
@@ -29,6 +29,7 @@ fn real_battles_run_to_win_or_loss_and_reset() {
             .unwrap();
         assert_eq!(selected.reward, 0.0);
         assert!(!selected.terminated);
+        assert!(selected.events.is_empty());
 
         let initial = battle_observation(selected.observation);
         assert!(!initial.terminated);
@@ -43,6 +44,43 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 
         for turn in 0..3 {
             let outcome = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+            let (winner, loser, attacker, defender) = if player_wins {
+                (BattleSide::Player, BattleSide::Opponent, 4, [5, 2, 0][turn])
+            } else {
+                (BattleSide::Opponent, BattleSide::Player, 5, [4, 1, 3][turn])
+            };
+
+            let mut events = vec![
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Player,
+                    slot: if player_wins { attacker } else { defender },
+                    move_slot: 0,
+                },
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Opponent,
+                    slot: if player_wins { defender } else { attacker },
+                    move_slot: 0,
+                },
+                BattleEvent::Damage {
+                    side: loser,
+                    slot: defender,
+                    damage: 1,
+                    hp_before: 1,
+                    hp_after: 0,
+                },
+                BattleEvent::Fainted {
+                    side: loser,
+                    slot: defender,
+                },
+            ];
+
+            if turn == 2 {
+                events.push(BattleEvent::BattleCompleted {
+                    winner: Some(winner),
+                });
+            }
+
+            assert_eq!(outcome.events, events);
 
             reward += outcome.reward;
             assert_eq!(outcome.terminated, turn == 2);
@@ -86,6 +124,20 @@ fn real_battles_run_to_win_or_loss_and_reset() {
                 };
 
                 let replacement = environment.step(action, opponent_action).unwrap();
+                let slot = if player_wins {
+                    [2, 0][turn]
+                } else {
+                    [1, 3][turn]
+                };
+
+                assert_eq!(
+                    replacement.events,
+                    vec![BattleEvent::Switched {
+                        side: loser,
+                        from: None,
+                        to: slot,
+                    }]
+                );
                 assert_eq!(replacement.reward, 0.0);
                 assert!(!replacement.terminated);
 
@@ -108,8 +160,60 @@ fn real_battles_run_to_win_or_loss_and_reset() {
             .unwrap();
         assert_eq!(restarted.reward, 0.0);
         assert!(!restarted.terminated);
+        assert!(restarted.events.is_empty());
         assert_eq!(battle_observation(restarted.observation), initial);
         assert!(environment.step(Action::Move(0), Action::Move(0)).is_ok());
+    }
+}
+
+#[test]
+fn a_miss_preserves_target_hp_and_allows_the_counterattack() {
+    for player_misses in [true, false] {
+        let faster = roster("Charizard").map(|mut pokemon| {
+            pokemon.moves[0].accuracy = Some(0);
+            pokemon
+        });
+        let slower = roster("Venusaur");
+        let (player, opponent, side, target) = if player_misses {
+            (faster, slower, BattleSide::Player, BattleSide::Opponent)
+        } else {
+            (slower, faster, BattleSide::Opponent, BattleSide::Player)
+        };
+        let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
+        let initial = env
+            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        let turn = env.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert!(turn.events.contains(&BattleEvent::Miss {
+            side,
+            slot: 0,
+            move_slot: 0
+        }));
+        assert!(
+            !turn
+                .events
+                .iter()
+                .any(|event| matches!(event, BattleEvent::Damage { side, .. } if *side == target))
+        );
+        assert!(
+            matches!(turn.events.last(), Some(BattleEvent::Damage { side: damaged, .. }) if *damaged == side)
+        );
+
+        let before = battle_observation(initial.observation);
+        let after = battle_observation(turn.observation.clone());
+
+        if player_misses {
+            assert_eq!(before.opponent.roster(), after.opponent.roster());
+        } else {
+            assert_eq!(before.player.roster(), after.player.roster());
+        }
+
+        env.reset_with_seed(46);
+        env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .unwrap();
+
+        assert_eq!(env.step(Action::Move(0), Action::Move(0)).unwrap(), turn);
     }
 }
 
@@ -168,6 +272,26 @@ fn protect_and_switches_use_real_moves_and_preserve_benched_hp() {
     let initial = battle_observation(selected.observation);
 
     let protected = environment.step(Action::Move(3), Action::Move(0)).unwrap();
+    assert_eq!(
+        protected.events,
+        vec![
+            BattleEvent::MoveSelected {
+                side: BattleSide::Player,
+                slot: 0,
+                move_slot: 3
+            },
+            BattleEvent::MoveSelected {
+                side: BattleSide::Opponent,
+                slot: 0,
+                move_slot: 0
+            },
+            BattleEvent::MoveBlocked {
+                side: BattleSide::Opponent,
+                slot: 0,
+                move_slot: 0
+            },
+        ]
+    );
     assert_eq!(protected.reward, 0.0);
     assert_eq!(battle_observation(protected.observation), initial);
 
@@ -178,6 +302,29 @@ fn protect_and_switches_use_real_moves_and_preserve_benched_hp() {
 
     let switched = battle_observation(outcome.observation);
     let opponent_hp = switched.opponent.roster()[1].hp_curr();
+    let hp_before = initial.opponent.roster()[1].hp_curr();
+    assert_eq!(
+        outcome.events,
+        vec![
+            BattleEvent::MoveSelected {
+                side: BattleSide::Player,
+                slot: 0,
+                move_slot: 0
+            },
+            BattleEvent::Switched {
+                side: BattleSide::Opponent,
+                from: Some(0),
+                to: 1
+            },
+            BattleEvent::Damage {
+                side: BattleSide::Opponent,
+                slot: 1,
+                damage: hp_before - opponent_hp,
+                hp_before,
+                hp_after: opponent_hp
+            },
+        ]
+    );
     assert!(opponent_hp > 0 && opponent_hp < initial.opponent.roster()[1].hp_curr());
     assert_eq!(switched.player.roster(), initial.player.roster());
     assert_eq!(switched.opponent.roster()[0], initial.opponent.roster()[0]);
@@ -193,15 +340,53 @@ fn protect_and_switches_use_real_moves_and_preserve_benched_hp() {
 
     let switched = battle_observation(outcome.observation);
     let player_hp = switched.player.roster()[1].hp_curr();
+    let hp_before = initial.player.roster()[1].hp_curr();
+    assert_eq!(
+        outcome.events,
+        vec![
+            BattleEvent::MoveSelected {
+                side: BattleSide::Opponent,
+                slot: 1,
+                move_slot: 0
+            },
+            BattleEvent::Switched {
+                side: BattleSide::Player,
+                from: Some(0),
+                to: 1
+            },
+            BattleEvent::Damage {
+                side: BattleSide::Player,
+                slot: 1,
+                damage: hp_before - player_hp,
+                hp_before,
+                hp_after: player_hp
+            },
+        ]
+    );
     assert!(player_hp < initial.player.roster()[1].hp_curr());
     assert_eq!(switched.player.roster()[0], initial.player.roster()[0]);
     assert_eq!(switched.opponent.roster()[1].hp_curr(), opponent_hp);
 
-    for slot in [2, 0, 1] {
+    for (from, slot) in [(1, 2), (2, 0), (0, 1)] {
         let outcome = environment
             .step(Action::Switch(slot), Action::Switch(slot))
             .unwrap();
         assert_eq!(outcome.reward, 0.0);
+        assert_eq!(
+            outcome.events,
+            vec![
+                BattleEvent::Switched {
+                    side: BattleSide::Player,
+                    from: Some(from),
+                    to: slot
+                },
+                BattleEvent::Switched {
+                    side: BattleSide::Opponent,
+                    from: Some(from),
+                    to: slot
+                },
+            ]
+        );
 
         let observation = battle_observation(outcome.observation);
         assert_eq!(observation.player.slot_active(), Some(slot));
@@ -234,7 +419,29 @@ fn failed_core_turn_leaves_hp_unchanged_for_the_next_step() {
     );
 
     let retried = environment.step(Action::Move(3), Action::Move(0)).unwrap();
-    assert_eq!(retried, selected);
+    assert_eq!(retried.observation, selected.observation);
+    assert_eq!(retried.reward, selected.reward);
+    assert_eq!(retried.terminated, selected.terminated);
+    assert_eq!(
+        retried.events,
+        vec![
+            BattleEvent::MoveSelected {
+                side: BattleSide::Player,
+                slot: 0,
+                move_slot: 3
+            },
+            BattleEvent::MoveSelected {
+                side: BattleSide::Opponent,
+                slot: 0,
+                move_slot: 0
+            },
+            BattleEvent::MoveBlocked {
+                side: BattleSide::Opponent,
+                slot: 0,
+                move_slot: 0
+            },
+        ]
+    );
 }
 
 #[test]
@@ -254,6 +461,32 @@ fn reveals_an_opponent_that_faints_on_switch_in() {
         .step(Action::Move(0), Action::Switch(1))
         .unwrap();
     assert!(!outcome.terminated);
+    assert_eq!(
+        outcome.events,
+        vec![
+            BattleEvent::MoveSelected {
+                side: BattleSide::Player,
+                slot: 0,
+                move_slot: 0
+            },
+            BattleEvent::Switched {
+                side: BattleSide::Opponent,
+                from: Some(0),
+                to: 1
+            },
+            BattleEvent::Damage {
+                side: BattleSide::Opponent,
+                slot: 1,
+                damage: 1,
+                hp_before: 1,
+                hp_after: 0
+            },
+            BattleEvent::Fainted {
+                side: BattleSide::Opponent,
+                slot: 1
+            },
+        ]
+    );
 
     let observation = battle_observation(outcome.observation);
     assert_eq!(observation.opponent.roster()[1].hp_curr(), 0);
@@ -343,10 +576,11 @@ fn only_equipped_move_slots_are_available_in_preview_and_battle() {
                 Err(ActionError::UnavailableMove)
             );
         }
-        assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
-            selected
-        );
+
+        let protected = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert_eq!(protected.observation, selected.observation);
+        assert_eq!(protected.reward, selected.reward);
+        assert_eq!(protected.terminated, selected.terminated);
         // Switch the opponent to its three-move reserve before testing its empty slot.
         let switched = environment
             .step(Action::Move(0), Action::Switch(5))
@@ -355,10 +589,11 @@ fn only_equipped_move_slots_are_available_in_preview_and_battle() {
             environment.step(Action::Move(0), Action::Move(3)),
             Err(ActionError::UnavailableMove)
         );
-        assert_eq!(
-            environment.step(Action::Move(0), Action::Move(0)).unwrap(),
-            switched
-        );
+
+        let protected = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+        assert_eq!(protected.observation, switched.observation);
+        assert_eq!(protected.reward, switched.reward);
+        assert_eq!(protected.terminated, switched.terminated);
     }
 }
 
@@ -422,6 +657,7 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
     let opponent_selection = [5, 2, 0];
     let initial_player = roster("Charizard").map(|mut pokemon| {
         pokemon.current_hp -= 7;
+        pokemon.moves[2].accuracy = Some(50);
         pokemon
     });
     let initial_opponent = initial_player.clone().map(|mut pokemon| {
@@ -503,7 +739,14 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
             &step.observation,
             Observation::Battle(state) if state.player.slot_active().is_none() || state.opponent.slot_active().is_none()
         )));
-        // Compare every observation, reward, and termination flag, including the terminal state.
+        assert!(expected.iter().any(|step| !step.events.is_empty()));
+        assert!(
+            expected
+                .iter()
+                .flat_map(|step| &step.events)
+                .any(|event| matches!(event, BattleEvent::Miss { .. }))
+        );
+        // Compare every observation, reward, event, and termination flag.
         assert_eq!(replay.run().unwrap(), expected);
         assert_eq!(replay.run().unwrap(), expected);
         assert_eq!(replay.player, initial_player);
@@ -655,6 +898,44 @@ fn seeded_speed_ties_replay_without_fixing_the_winner() {
         assert_ne!(actual.player.slot_active(), actual.opponent.slot_active());
 
         winners[usize::from(actual.player.slot_active().is_some())] = true;
+
+        let winner = if actual.player.slot_active().is_some() {
+            BattleSide::Player
+        } else {
+            BattleSide::Opponent
+        };
+        assert_eq!(first.events(), replay.events());
+        assert_eq!(
+            first.events()[..2],
+            [
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Player,
+                    slot: 0,
+                    move_slot: 0
+                },
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Opponent,
+                    slot: 0,
+                    move_slot: 0
+                },
+            ]
+        );
+
+        let loser = if winner == BattleSide::Player {
+            BattleSide::Opponent
+        } else {
+            BattleSide::Player
+        };
+        assert_eq!(
+            first.events()[2],
+            BattleEvent::Damage {
+                side: loser,
+                slot: 0,
+                damage: 1,
+                hp_before: 1,
+                hp_after: 0
+            }
+        );
     }
 
     assert_eq!(winners, [true, true]);
@@ -712,6 +993,7 @@ fn seeded_environment_replays_damage_switches_and_resets() {
 fn failed_turn_preserves_randomness_for_the_next_valid_turn() {
     let mut player = roster("Charizard");
     player[0].stats.defense = 0;
+    player[0].moves[0].accuracy = Some(50);
 
     let opponent = roster("Venusaur").map(|mut pokemon| {
         pokemon.stats.hp = u16::MAX;
@@ -734,7 +1016,7 @@ fn failed_turn_preserves_randomness_for_the_next_valid_turn() {
         actual.step(Action::Move(4), Action::Move(0)),
         Err(ActionError::UnavailableMove)
     );
-    // The first attack consumes a damage roll; the second fails on zero defense.
+    // The first attack consumes an accuracy roll; the second fails on zero defense.
     assert_eq!(
         actual.step(Action::Move(0), Action::Move(0)),
         Err(ActionError::Battle(BattleError::ZeroDefenseStat))
@@ -793,7 +1075,7 @@ fn direct_battle_keeps_runtime_move_availability() {
     battle
         .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
             state.player = runtime_team(100_000, [true, false, true, true]);
-            Ok(())
+            Ok(Vec::new())
         })
         .unwrap();
 

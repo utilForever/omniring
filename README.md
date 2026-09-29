@@ -97,6 +97,30 @@ assert_eq!(env.step(Action::Move(0), Action::Move(0))?, first);
 
 Custom transitions passed to `Battle::play_turn` or `Environment::new` now receive a fourth argument, `&mut SmallRng`: use `|state, action, opponent_action, rng|`, or `_` for the last argument if no randomness is needed. `Environment::new_with_seed(preview, selection, seed, transition)` seeds a custom transition. Use the supplied RNG for random decisions. State captured by a callback is not reset or rolled back by the environment.
 
+### Structured battle events
+
+Each `StepOutcome.events` contains that step's `Vec<BattleEvent>` in resolution order. Direct battles expose the last successful turn's events through `Battle::events()`. Collect the returned steps or copy those slices to retain an episode history; the battle only retains its latest successful turn.
+
+```rust
+use omniring::BattleEvent;
+
+let outcome = env.step(Action::Move(0), Action::Move(0))?;
+
+for event in &outcome.events {
+    if let BattleEvent::Damage { side, slot, damage, hp_before, hp_after } = event {
+        assert_eq!(*damage, hp_before - hp_after);
+    }
+}
+```
+
+Events identify the `BattleSide` and zero-based roster/move slots, so identical Pokemon names are unambiguous. Each attack turn first records accepted `MoveSelected` choices (player then opponent), including a Pokemon that will faint before acting. These choices are for replay/debugging and include the opponent's unexecuted choice. Switches follow (player then opponent when both switch), then attack outcomes in priority/speed order. Damage is actual HP lost, capped at remaining HP; `Fainted` follows lethal damage. A failed accuracy check emits `Miss` without damage. Protect/Detect emit `MoveBlocked` for the blocked attack. Status and immune moves produce no damage event. `BattleCompleted` comes last with the winning side, or `None` for a draw.
+
+Team selection returns no events. Forced replacement steps contain only switches; their ignored move inputs are not recorded as choices. Failed turns preserve the previous state, RNG, and events; reset starts with no history. Event collection makes no random draws and does not change combat behavior.
+
+The core resolver now checks `Move.accuracy` using the battle-owned RNG before damage calculation. `None` and values at least 100 always hit the accuracy check; 0 always misses. Values from 1 to 99 consume one percentage roll. Guaranteed hits/misses and blocked moves consume no accuracy roll, and a miss consumes no damage roll. This adds combat behavior for moves below 100% accuracy, so seeded episodes using them can differ from earlier versions. Accuracy/evasion stages and status effects remain outside this implementation. `calculate_damage` still calculates damage only; accuracy belongs to turn resolution.
+
+**Custom transition API change:** callbacks now return `Result<Vec<BattleEvent>, ActionError>` instead of `Result<(), ActionError>`. Replace `Ok(())` with `Ok(Vec::new())` when no attack outcomes are needed, or return them in their actual order. The battle adds move selections, action-driven switches, and completion; callbacks must report their own damage, faint, and miss events. Callback events are trusted and are not inferred or validated against HP changes.
+
 ### Replay a completed battle
 
 `BattleReplay` stores the initial player and opponent rosters (including HP), opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. The opponent action during team preview is ignored, as in a live episode.
@@ -116,7 +140,7 @@ assert!(outcomes.last().unwrap().terminated);
 assert_eq!(replay.run()?, outcomes);
 ```
 
-`run()` creates a fresh seeded environment and uses the normal `step` path. It returns every `StepOutcome` in order, preserving observations, rewards, and termination flags; the last observation is the terminal state visible to the player. These step outcomes are the replay's event trace. The input stores no intermediate states, and there is no separate event engine or stable on-disk format. The same library-version and target-platform limits as seeded battles apply.
+`run()` creates a fresh seeded environment and uses the normal `step` path. It returns every `StepOutcome` in order, preserving observations, rewards, structured events, and termination flags; the last observation is the terminal state visible to the player. These step outcomes are the replay's event trace. The input stores no intermediate states, and there is no separate event engine or stable on-disk format. The same library-version and target-platform limits as seeded battles apply.
 
 Errors distinguish invalid setup (`ReplayError::InvalidSetup`), a failed action with its zero-based step index and original `ActionError` (`ReplayError::InvalidAction`), and an empty or unfinished sequence (`ReplayError::Incomplete`). Extra actions after termination fail with `ActionError::BattleTerminated`.
 

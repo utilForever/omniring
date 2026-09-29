@@ -4,11 +4,72 @@ use crate::info::{BattleError, Move, MoveCategory, Pokemon};
 use crate::{Action, ActionError, BattleState, StateError, TeamState};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 
+/// Identifies a Trainer independently of Pokemon names or roster slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BattleSide {
+    Player,
+    Opponent,
+}
+
+impl BattleSide {
+    fn other(self) -> Self {
+        match self {
+            Self::Player => Self::Opponent,
+            Self::Opponent => Self::Player,
+        }
+    }
+}
+
+/// Events from one successful turn. Selections precede resolution events; all slots are zero-based.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BattleEvent {
+    /// An accepted move choice, recorded player first, even if its user faints before acting.
+    MoveSelected {
+        side: BattleSide,
+        slot: usize,
+        move_slot: usize,
+    },
+    /// An attempted move that failed its accuracy check.
+    Miss {
+        side: BattleSide,
+        slot: usize,
+        move_slot: usize,
+    },
+    MoveBlocked {
+        side: BattleSide,
+        slot: usize,
+        move_slot: usize,
+    },
+    /// Actual HP lost, capped at the target's remaining HP.
+    Damage {
+        side: BattleSide,
+        slot: usize,
+        damage: u32,
+        hp_before: u32,
+        hp_after: u32,
+    },
+    Fainted {
+        side: BattleSide,
+        slot: usize,
+    },
+    /// `from` is `None` for a forced replacement after fainting.
+    Switched {
+        side: BattleSide,
+        from: Option<usize>,
+        to: usize,
+    },
+    /// `None` means both selected teams are defeated.
+    BattleCompleted {
+        winner: Option<BattleSide>,
+    },
+}
+
 /// A single battle that owns its state and random stream and delegates turn resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Battle {
     state: BattleState,
     pub(crate) rng: SmallRng,
+    events: Vec<BattleEvent>,
 }
 
 impl Battle {
@@ -24,11 +85,21 @@ impl Battle {
     }
 
     pub(crate) fn with_rng(state: BattleState, rng: SmallRng) -> Self {
-        Self { state, rng }
+        Self {
+            state,
+            rng,
+            events: Vec::new(),
+        }
     }
 
     pub fn state(&self) -> &BattleState {
         &self.state
+    }
+
+    /// Events from the last successful turn. Failed turns leave this slice unchanged.
+    /// Copy or append these events after each turn to retain an episode history.
+    pub fn events(&self) -> &[BattleEvent] {
+        &self.events
     }
 
     /// Resolves a turn using immutable calculation data for the corresponding roster slots.
@@ -52,7 +123,9 @@ impl Battle {
     }
 
     /// Resolves a turn with a custom transition using this battle's random stream.
-    /// State and random draws are committed only on success. Side effects captured by
+    /// The callback returns its attack outcomes in order; selections, switches, and completion are added here.
+    /// Return `Ok(Vec::new())` when the transition has no events to report.
+    /// State, random draws, and events are committed only on success. Side effects captured by
     /// the callback are the caller's responsibility and cannot be rolled back here.
     pub fn play_turn(
         &mut self,
@@ -63,7 +136,7 @@ impl Battle {
             Action,
             Action,
             &mut SmallRng,
-        ) -> Result<(), ActionError>,
+        ) -> Result<Vec<BattleEvent>, ActionError>,
     ) -> Result<&BattleState, ActionError> {
         if self.state.terminated {
             return Err(ActionError::BattleTerminated);
@@ -73,33 +146,82 @@ impl Battle {
             || self.state.opponent.slot_active().is_none();
         let mut next = self.state.clone();
         let mut rng = self.rng.clone();
+        let mut events = Vec::new();
 
         next.player.validate_action(player_action)?;
         next.opponent.validate_action(opponent_action)?;
 
+        if !replacement_pending {
+            for (side, team, action) in [
+                (BattleSide::Player, &next.player, player_action),
+                (BattleSide::Opponent, &next.opponent, opponent_action),
+            ] {
+                if let Action::Move(move_slot) = action {
+                    events.push(BattleEvent::MoveSelected {
+                        side,
+                        slot: team.slot_active().unwrap(),
+                        move_slot,
+                    });
+                }
+            }
+        }
+
         if let Action::Switch(slot) = player_action {
+            let from = next.player.slot_active();
+
             next.player
                 .switch_to(slot)
                 .map_err(|_| ActionError::InvalidSwitch)?;
+            events.push(BattleEvent::Switched {
+                side: BattleSide::Player,
+                from,
+                to: slot,
+            });
         }
 
         if let Action::Switch(slot) = opponent_action {
+            let from = next.opponent.slot_active();
+
             next.opponent
                 .switch_to(slot)
                 .map_err(|_| ActionError::InvalidSwitch)?;
+            events.push(BattleEvent::Switched {
+                side: BattleSide::Opponent,
+                from,
+                to: slot,
+            });
         }
 
         if !replacement_pending
             && (matches!(player_action, Action::Move(_))
                 || matches!(opponent_action, Action::Move(_)))
         {
-            resolve_turn(&mut next, player_action, opponent_action, &mut rng)?;
+            events.extend(resolve_turn(
+                &mut next,
+                player_action,
+                opponent_action,
+                &mut rng,
+            )?);
         }
 
         next.terminated =
             !next.player.has_available_selected() || !next.opponent.has_available_selected();
+
+        if next.terminated {
+            let winner = if next.player.has_available_selected() {
+                Some(BattleSide::Player)
+            } else if next.opponent.has_available_selected() {
+                Some(BattleSide::Opponent)
+            } else {
+                None
+            };
+
+            events.push(BattleEvent::BattleCompleted { winner });
+        }
+
         self.state = next;
         self.rng = rng;
+        self.events = events;
         Ok(&self.state)
     }
 
@@ -112,7 +234,7 @@ impl Battle {
         action: Action,
         opponent_action: Action,
         rng: &mut SmallRng,
-    ) -> Result<(), ActionError> {
+    ) -> Result<Vec<BattleEvent>, ActionError> {
         let player_slot = state
             .player
             .slot_active()
@@ -125,17 +247,50 @@ impl Battle {
         let player = &player_roster[player_slot];
         let opponent = &opponent_roster[opponent_slot];
 
+        let mut events = Vec::new();
+
         match (action, opponent_action) {
-            (Action::Move(first), Action::Move(second)) => simulate_turn(
-                player,
-                &mut state.player,
-                opponent,
-                &mut state.opponent,
-                first,
-                second,
-                rng,
-            )
-            .map(|_| ()),
+            (Action::Move(first), Action::Move(second)) => {
+                let result = simulate_turn(
+                    player,
+                    &mut state.player,
+                    opponent,
+                    &mut state.opponent,
+                    first,
+                    second,
+                    rng,
+                )?;
+                let (side, attacker, defender, first_move, second_move) = match result.order {
+                    TurnOrder::FirstPokemon => (
+                        BattleSide::Player,
+                        player_slot,
+                        opponent_slot,
+                        first,
+                        second,
+                    ),
+                    TurnOrder::SecondPokemon => (
+                        BattleSide::Opponent,
+                        opponent_slot,
+                        player_slot,
+                        second,
+                        first,
+                    ),
+                };
+
+                result
+                    .first
+                    .append_events(&mut events, side, attacker, defender, first_move);
+
+                if let Some(second) = result.second {
+                    second.append_events(
+                        &mut events,
+                        side.other(),
+                        defender,
+                        attacker,
+                        second_move,
+                    );
+                }
+            }
             (Action::Move(slot), Action::Switch(_)) => execute_move(
                 player,
                 &state.player,
@@ -144,8 +299,14 @@ impl Battle {
                 slot,
                 false,
                 rng,
-            )
-            .map(|_| ()),
+            )?
+            .append_events(
+                &mut events,
+                BattleSide::Player,
+                player_slot,
+                opponent_slot,
+                slot,
+            ),
             (Action::Switch(_), Action::Move(slot)) => execute_move(
                 opponent,
                 &state.opponent,
@@ -154,10 +315,17 @@ impl Battle {
                 slot,
                 false,
                 rng,
-            )
-            .map(|_| ()),
-            _ => Err(ActionError::WrongPhase),
+            )?
+            .append_events(
+                &mut events,
+                BattleSide::Opponent,
+                opponent_slot,
+                player_slot,
+                slot,
+            ),
+            _ => return Err(ActionError::WrongPhase),
         }
+        Ok(events)
     }
 }
 
@@ -169,11 +337,54 @@ pub struct AttackResult {
     pub damage: u16,
     pub effectiveness: f32,
     pub blocked: bool, // protect moves
+    pub missed: bool,
+    pub defender_hp_before: u32,
     pub defender_hp_after: u32,
+}
+
+impl AttackResult {
+    fn append_events(
+        &self,
+        events: &mut Vec<BattleEvent>,
+        side: BattleSide,
+        attacker: usize,
+        defender: usize,
+        move_slot: usize,
+    ) {
+        if self.missed {
+            events.push(BattleEvent::Miss {
+                side,
+                slot: attacker,
+                move_slot,
+            });
+        } else if self.blocked {
+            events.push(BattleEvent::MoveBlocked {
+                side,
+                slot: attacker,
+                move_slot,
+            });
+        } else if self.defender_hp_after < self.defender_hp_before {
+            events.push(BattleEvent::Damage {
+                side: side.other(),
+                slot: defender,
+                damage: self.defender_hp_before - self.defender_hp_after,
+                hp_before: self.defender_hp_before,
+                hp_after: self.defender_hp_after,
+            });
+
+            if self.defender_hp_after == 0 {
+                events.push(BattleEvent::Fainted {
+                    side: side.other(),
+                    slot: defender,
+                });
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TurnResult {
+    pub order: TurnOrder,
     pub first: AttackResult,
     pub second: Option<AttackResult>,
 }
@@ -256,11 +467,18 @@ fn simulate_turn(
             faster,
             faster_team,
             slower_move,
-            is_protective_status_move(&faster.moves[faster_move]),
+            !first.missed
+                && !first.blocked
+                && is_protective_status_move(&faster.moves[faster_move]),
             rng,
         )?)
     };
-    Ok(TurnResult { first, second })
+
+    Ok(TurnResult {
+        order,
+        first,
+        second,
+    })
 }
 
 fn execute_move(
@@ -280,8 +498,13 @@ fn execute_move(
         BattleError::InvalidMoveIndex { index: move_index },
     ))?;
     let target = defender_team.slot_active();
+    let defender_hp_before = target.map_or(0, |slot| defender_team.roster()[slot].hp_curr());
     let blocked = target.is_none() || (defender_is_protected && selected_move.power > 0);
-    let result = if blocked {
+    let missed = !blocked
+        && selected_move.accuracy.is_some_and(|accuracy| {
+            accuracy == 0 || (accuracy < 100 && rng.random_range(0..100_u8) >= accuracy)
+        });
+    let result = if blocked || missed {
         DamageResult {
             damage: 0,
             effectiveness: 1.0,
@@ -302,6 +525,8 @@ fn execute_move(
         damage: result.damage,
         effectiveness: result.effectiveness,
         blocked,
+        missed,
+        defender_hp_before,
         defender_hp_after: target.map_or(0, |slot| defender_team.roster()[slot].hp_curr()),
     })
 }
@@ -385,7 +610,7 @@ mod state_tests {
                     state.opponent.damage_active(1_000).unwrap();
                     state.opponent.switch_to(2).unwrap();
                     state.opponent.damage_active(1_000).unwrap();
-                    Ok(())
+                    Ok(Vec::new())
                 },
             )
             .unwrap();
@@ -408,7 +633,7 @@ mod state_tests {
         let state = battle
             .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.player.damage_active(1_000).unwrap();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
         assert_eq!(state.player.slot_active(), None);
@@ -436,7 +661,7 @@ mod state_tests {
         let state = battle
             .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1).unwrap();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
         assert_eq!(state.opponent.roster()[0].hp_curr(), 99);
@@ -462,7 +687,7 @@ mod state_tests {
         let state = battle
             .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
         assert!(!state.terminated);
@@ -477,7 +702,7 @@ mod state_tests {
         let state = battle
             .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
         assert!(!state.terminated);
@@ -492,7 +717,7 @@ mod state_tests {
         let state = battle
             .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
                 state.opponent.damage_active(1_000).unwrap();
-                Ok(())
+                Ok(Vec::new())
             })
             .unwrap();
         assert!(state.terminated);
@@ -528,6 +753,185 @@ mod resolution_tests {
     use crate::PokemonState;
     use crate::info::{Nature, PokemonType, StatPoints};
     use crate::pokedex::{build_pokemon_from_pokedex, find_pokemon};
+
+    #[test]
+    fn accuracy_checks_preserve_hp_and_consume_only_needed_random_draws() {
+        let defender = venusaur();
+        let mut saw_hit_and_miss = [false; 2];
+
+        for accuracy in [None, Some(0), Some(50), Some(100), Some(255)] {
+            for blocked in [false, true] {
+                for status in [false, true] {
+                    for seed in 0..16 {
+                        let mut attacker = charizard();
+                        attacker.moves[0].accuracy = accuracy;
+
+                        if status {
+                            attacker.moves[0].category = MoveCategory::Status;
+                            attacker.moves[0].power = 0;
+                        }
+
+                        let mut expected_rng = SmallRng::seed_from_u64(seed);
+                        let blocked = blocked && !status;
+                        let missed = !blocked
+                            && match accuracy {
+                                Some(0) => true,
+                                Some(50) => expected_rng.random_range(0..100_u8) >= 50,
+                                _ => false,
+                            };
+                        let damage = if missed || blocked {
+                            0
+                        } else {
+                            calculate_damage_with_rng(
+                                &attacker,
+                                &defender,
+                                &attacker.moves[0],
+                                &mut expected_rng,
+                            )
+                            .unwrap()
+                            .damage
+                        };
+                        let mut rng = SmallRng::seed_from_u64(seed);
+                        let mut target = team(&defender);
+                        let hp_before = target.roster()[0].hp_curr();
+                        let result = execute_move(
+                            &attacker,
+                            &team(&attacker),
+                            &defender,
+                            &mut target,
+                            0,
+                            blocked,
+                            &mut rng,
+                        )
+                        .unwrap();
+
+                        assert_eq!(
+                            (result.missed, result.blocked, result.damage),
+                            (missed, blocked, damage)
+                        );
+                        assert_eq!(
+                            result.defender_hp_after,
+                            hp_before.saturating_sub(u32::from(damage))
+                        );
+                        assert_eq!(target.roster()[0].hp_curr(), result.defender_hp_after);
+                        assert_eq!(rng, expected_rng);
+
+                        if accuracy == Some(50) && !blocked {
+                            saw_hit_and_miss[usize::from(missed)] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(saw_hit_and_miss, [true, true]);
+    }
+
+    #[test]
+    fn a_missed_protect_does_not_block_the_counterattack() {
+        let mut protector = charizard();
+        protector.moves[3].accuracy = Some(0);
+
+        let attacker = venusaur();
+        let result = simulate_turn(
+            &protector,
+            &mut team(&protector),
+            &attacker,
+            &mut team(&attacker),
+            3,
+            0,
+            &mut SmallRng::seed_from_u64(46),
+        )
+        .unwrap();
+        assert!(result.first.missed);
+
+        let second = result.second.unwrap();
+        assert!(!second.blocked);
+        assert!(second.damage > 0);
+    }
+
+    #[test]
+    fn collecting_events_preserves_turn_state_and_random_stream() {
+        let player = charizard();
+        let opponent = charizard(); // Same names and speed must not obscure the acting side.
+
+        for seed in 0..16 {
+            let initial = BattleState {
+                player: team(&player),
+                opponent: team(&opponent),
+                terminated: false,
+            };
+            let mut expected = initial.clone();
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let turn = simulate_turn(
+                &player,
+                &mut expected.player,
+                &opponent,
+                &mut expected.opponent,
+                2,
+                0,
+                &mut rng,
+            )
+            .unwrap();
+
+            let mut battle = Battle::with_seed(initial.clone(), seed);
+            battle
+                .play_turn_with_rosters(
+                    &std::array::from_fn(|_| player.clone()),
+                    &std::array::from_fn(|_| opponent.clone()),
+                    Action::Move(2),
+                    Action::Move(0),
+                )
+                .unwrap();
+
+            assert_eq!(battle.state(), &expected);
+            assert_eq!(battle.rng, rng);
+
+            let first = match turn.order {
+                TurnOrder::FirstPokemon => BattleSide::Player,
+                TurnOrder::SecondPokemon => BattleSide::Opponent,
+            };
+            let events = battle.events();
+
+            assert_eq!(events.len(), 4);
+            assert_eq!(
+                events[0],
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Player,
+                    slot: 0,
+                    move_slot: 2
+                }
+            );
+            assert_eq!(
+                events[1],
+                BattleEvent::MoveSelected {
+                    side: BattleSide::Opponent,
+                    slot: 0,
+                    move_slot: 0
+                }
+            );
+
+            for (index, side) in [(2, first.other()), (3, first)] {
+                let (before, after) = match side {
+                    BattleSide::Player => (&initial.player, &expected.player),
+                    BattleSide::Opponent => (&initial.opponent, &expected.opponent),
+                };
+                let hp_before = before.roster()[0].hp_curr();
+                let hp_after = after.roster()[0].hp_curr();
+
+                assert_eq!(
+                    events[index],
+                    BattleEvent::Damage {
+                        side,
+                        slot: 0,
+                        damage: hp_before - hp_after,
+                        hp_before,
+                        hp_after
+                    }
+                );
+            }
+        }
+    }
 
     fn team(pokemon: &Pokemon) -> TeamState {
         TeamState::new(
