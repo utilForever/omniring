@@ -1,6 +1,9 @@
 use omniring::info::{BattleError, Nature, Pokemon, StatPoints};
 use omniring::pokedex::build_pokemon_from_pokedex;
-use omniring::{Action, ActionError, BattleObservation, Environment, Observation, StateError};
+use omniring::{
+    Action, ActionError, Battle, BattleObservation, BattleState, Environment, Observation,
+    PokemonState, StateError, TeamState,
+};
 
 #[test]
 fn real_battles_run_to_win_or_loss_and_reset() {
@@ -411,4 +414,129 @@ fn roster(species: &str) -> [Pokemon; 6] {
     .unwrap();
 
     std::array::from_fn(|_| pokemon.clone())
+}
+
+fn runtime_team(hp: u32, mask: [bool; 4]) -> TeamState {
+    TeamState::new(
+        std::array::from_fn(|_| PokemonState::new(hp, hp, mask).unwrap()),
+        [true, true, true, false, false, false],
+        Some(0),
+    )
+    .unwrap()
+}
+
+fn runtime_state() -> BattleState {
+    BattleState {
+        player: runtime_team(100_000, [true; 4]),
+        opponent: runtime_team(100_000, [true; 4]),
+        terminated: false,
+    }
+}
+
+#[test]
+fn direct_battle_uses_canonical_hp_for_either_turn_order() {
+    for player_faster in [true, false] {
+        let (mut player, mut opponent) = if player_faster {
+            (roster("Charizard"), roster("Venusaur"))
+        } else {
+            (roster("Venusaur"), roster("Charizard"))
+        };
+        for pokemon in player.iter_mut().chain(opponent.iter_mut()) {
+            pokemon.current_hp = 0;
+        }
+        let original_rosters = (player.clone(), opponent.clone());
+        let mut battle = Battle::new(runtime_state());
+
+        for _ in 0..2 {
+            let previous = battle.state().clone();
+            let next = battle
+                .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+                .unwrap();
+
+            for (before, after) in [
+                (&previous.player, &next.player),
+                (&previous.opponent, &next.opponent),
+            ] {
+                assert!(after.roster()[0].hp_curr() < before.roster()[0].hp_curr());
+                assert!(after.roster()[0].hp_curr() > u32::from(u16::MAX));
+                assert_eq!(&after.roster()[1..], &before.roster()[1..]);
+            }
+        }
+
+        assert_eq!((player, opponent), original_rosters);
+    }
+}
+
+#[test]
+fn direct_battle_keeps_runtime_move_availability() {
+    let player = roster("Charizard");
+    let opponent = roster("Venusaur");
+
+    let mut battle = Battle::new(runtime_state());
+    battle
+        .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+            state.player = runtime_team(100_000, [true, false, true, true]);
+            Ok(())
+        })
+        .unwrap();
+
+    let previous = battle.state().clone();
+
+    assert!(!previous.legal_player_actions().contains(&Action::Move(1)));
+    assert_eq!(
+        battle.play_turn_with_rosters(&player, &opponent, Action::Move(1), Action::Move(0),),
+        Err(ActionError::UnavailableMove)
+    );
+    assert_eq!(battle.state(), &previous);
+
+    battle
+        .play_turn_with_rosters(&player, &opponent, Action::Move(3), Action::Move(0))
+        .unwrap();
+
+    assert_eq!(battle.state(), &previous); // Protect changes neither HP nor mask.
+
+    let mut incomplete_player = player;
+    incomplete_player[0].moves.truncate(1);
+
+    assert_eq!(
+        battle.play_turn_with_rosters(
+            &incomplete_player,
+            &opponent,
+            Action::Move(2),
+            Action::Move(0),
+        ),
+        Err(ActionError::Battle(BattleError::InvalidMoveIndex {
+            index: 2
+        }))
+    );
+    assert_eq!(battle.state(), &previous);
+}
+
+#[test]
+fn direct_battle_rolls_back_an_error_after_the_first_attack() {
+    for player_faster in [true, false] {
+        let mut faster = roster("Charizard");
+        faster[0].stats.defense = 0;
+
+        let slower = roster("Venusaur");
+        let (player, opponent, retry) = if player_faster {
+            (faster, slower, (Action::Move(3), Action::Move(0)))
+        } else {
+            (slower, faster, (Action::Move(0), Action::Move(3)))
+        };
+        let initial = runtime_state();
+        let mut battle = Battle::new(initial.clone());
+
+        assert_eq!(
+            battle.play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0),),
+            Err(ActionError::Battle(BattleError::ZeroDefenseStat))
+        );
+        assert_eq!(battle.state(), &initial);
+
+        battle
+            .play_turn_with_rosters(&player, &opponent, retry.0, retry.1)
+            .unwrap();
+
+        assert_eq!(battle.state(), &initial);
+    }
 }

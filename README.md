@@ -75,6 +75,10 @@ cargo test --test environment_battle
 
 These focused checks use the real battle logic to cover reset, team selection, damage across steps, fainting, forced replacements, and terminal win/loss rewards. They also verify that unselected Pokemon keep their HP and that a completed environment can start a fresh episode. They run automatically with `cargo test --all`.
 
+### Battle runtime state
+
+`omniring::Battle` owns the runtime `BattleState`. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state unchanged, and observations are independent snapshots.
+
 ## Development
 
 Run the same core checks used in CI for code changes:
