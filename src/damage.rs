@@ -1,5 +1,5 @@
 use crate::info::{BattleError, Move, MoveCategory, Pokemon, type_effectiveness_against};
-use rand::{RngExt, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fraction {
@@ -63,15 +63,8 @@ impl Default for DamageModifier {
 
 impl DamageModifier {
     pub fn with_raw_random_roll(mut self, seed: Option<u64>) -> Result<Self, BattleError> {
-        let roll = match seed {
-            Some(seed) => {
-                let mut rng = StdRng::seed_from_u64(seed);
-                rng.random_range(85..=100)
-            }
-            None => rand::random_range(85..=100),
-        };
-
-        self.random_percent = roll;
+        let mut rng = StdRng::seed_from_u64(seed.unwrap_or_else(rand::random));
+        self.random_percent = rng.random_range(85..=100);
         Ok(self)
     }
 
@@ -109,6 +102,16 @@ pub fn calculate_damage(
     selected_move: &Move,
     seed: Option<u64>,
 ) -> Result<DamageResult, BattleError> {
+    let mut rng = StdRng::seed_from_u64(seed.unwrap_or_else(rand::random));
+    calculate_damage_with_rng(attacker, defender, selected_move, &mut rng)
+}
+
+pub(crate) fn calculate_damage_with_rng(
+    attacker: &Pokemon,
+    defender: &Pokemon,
+    selected_move: &Move,
+    rng: &mut impl Rng,
+) -> Result<DamageResult, BattleError> {
     if selected_move.category == MoveCategory::Status || selected_move.power == 0 {
         // TODO: Handle status moves that affect stats, conditions, etc.
         //       For now, we return 0 damage for status moves.
@@ -131,7 +134,10 @@ pub fn calculate_damage(
         return Err(BattleError::ZeroDefenseStat);
     }
 
-    let mut modifiers = DamageModifier::default().with_raw_random_roll(seed)?;
+    let mut modifiers = DamageModifier {
+        random_percent: rng.random_range(85..=100),
+        ..DamageModifier::default()
+    };
     modifiers.update_from_battle(attacker, defender, selected_move);
 
     if !(85..=100).contains(&modifiers.random_percent) {

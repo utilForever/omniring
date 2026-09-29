@@ -434,6 +434,146 @@ fn runtime_state() -> BattleState {
 }
 
 #[test]
+fn cloned_battles_replay_the_same_random_turns() {
+    let player = roster("Charizard");
+    let opponent = roster("Charizard");
+
+    let mut original = Battle::new(runtime_state());
+    original
+        .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+        .unwrap();
+
+    let mut replay = original.clone();
+
+    for _ in 0..16 {
+        let actual = original
+            .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+            .unwrap();
+        let expected = replay
+            .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn seeded_speed_ties_replay_without_fixing_the_winner() {
+    let roster = roster("Charizard");
+    let initial = BattleState {
+        player: runtime_team(1, [true; 4]),
+        opponent: runtime_team(1, [true; 4]),
+        terminated: false,
+    };
+    let mut winners = [false; 2];
+
+    for seed in 0..32 {
+        let mut first = Battle::with_seed(initial.clone(), seed);
+        let mut replay = Battle::with_seed(initial.clone(), seed);
+        let actual = first
+            .play_turn_with_rosters(&roster, &roster, Action::Move(0), Action::Move(0))
+            .unwrap();
+        let expected = replay
+            .play_turn_with_rosters(&roster, &roster, Action::Move(0), Action::Move(0))
+            .unwrap();
+
+        assert_eq!(actual, expected, "seed {seed}");
+        assert_ne!(actual.player.slot_active(), actual.opponent.slot_active());
+
+        winners[usize::from(actual.player.slot_active().is_some())] = true;
+    }
+
+    assert_eq!(winners, [true, true]);
+}
+
+#[test]
+fn seeded_environment_replays_damage_switches_and_resets() {
+    let roster = roster("Charizard").map(|mut pokemon| {
+        pokemon.stats.hp = u16::MAX;
+        pokemon.current_hp = u16::MAX;
+        pokemon
+    });
+    let mut environment =
+        Environment::from_rosters_with_seed(roster.clone(), roster, [0, 1, 2], 46).unwrap();
+    let preview = environment.reset();
+    let mut episodes = Vec::new();
+
+    // First run, ordinary reset, then explicit reseeding followed by another ordinary reset.
+    for episode in 0..4 {
+        if episode == 2 {
+            assert_eq!(environment.reset_with_seed(46), preview);
+        } else {
+            assert_eq!(environment.reset(), preview);
+        }
+
+        // Repeated preview resets must not change the stream either.
+        assert_eq!(environment.reset(), preview);
+
+        let mut outcomes = vec![
+            environment
+                .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+                .unwrap(),
+        ];
+
+        for (player, opponent) in [
+            (Action::Move(0), Action::Move(0)),
+            (Action::Move(1), Action::Move(2)),
+            (Action::Switch(1), Action::Move(0)),
+            (Action::Move(0), Action::Switch(1)),
+            (Action::Move(2), Action::Move(1)),
+            (Action::Move(0), Action::Move(0)),
+        ] {
+            outcomes.push(environment.step(player, opponent).unwrap());
+        }
+
+        episodes.push(outcomes);
+    }
+
+    assert_eq!(episodes[0], episodes[2]);
+    assert_eq!(episodes[1], episodes[3]);
+    assert_ne!(episodes[0], episodes[1]);
+}
+
+#[test]
+fn failed_turn_preserves_randomness_for_the_next_valid_turn() {
+    let mut player = roster("Charizard");
+    player[0].stats.defense = 0;
+
+    let opponent = roster("Venusaur").map(|mut pokemon| {
+        pokemon.stats.hp = u16::MAX;
+        pokemon.current_hp = u16::MAX;
+        pokemon
+    });
+    let mut actual =
+        Environment::from_rosters_with_seed(player.clone(), opponent.clone(), [0, 1, 2], 46)
+            .unwrap();
+    let mut control = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
+
+    actual
+        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .unwrap();
+    control
+        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .unwrap();
+
+    assert_eq!(
+        actual.step(Action::Move(4), Action::Move(0)),
+        Err(ActionError::UnavailableMove)
+    );
+    // The first attack consumes a damage roll; the second fails on zero defense.
+    assert_eq!(
+        actual.step(Action::Move(0), Action::Move(0)),
+        Err(ActionError::Battle(BattleError::ZeroDefenseStat))
+    );
+
+    for _ in 0..16 {
+        assert_eq!(
+            actual.step(Action::Move(0), Action::Move(2)).unwrap(),
+            control.step(Action::Move(0), Action::Move(2)).unwrap()
+        );
+    }
+}
+
+#[test]
 fn direct_battle_uses_canonical_hp_for_either_turn_order() {
     for player_faster in [true, false] {
         let (mut player, mut opponent) = if player_faster {
@@ -441,9 +581,11 @@ fn direct_battle_uses_canonical_hp_for_either_turn_order() {
         } else {
             (roster("Venusaur"), roster("Charizard"))
         };
+
         for pokemon in player.iter_mut().chain(opponent.iter_mut()) {
             pokemon.current_hp = 0;
         }
+
         let original_rosters = (player.clone(), opponent.clone());
         let mut battle = Battle::new(runtime_state());
 
@@ -474,7 +616,7 @@ fn direct_battle_keeps_runtime_move_availability() {
 
     let mut battle = Battle::new(runtime_state());
     battle
-        .play_turn(Action::Move(0), Action::Move(0), |state, _, _| {
+        .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
             state.player = runtime_team(100_000, [true, false, true, true]);
             Ok(())
         })
@@ -525,13 +667,15 @@ fn direct_battle_rolls_back_an_error_after_the_first_attack() {
             (slower, faster, (Action::Move(0), Action::Move(3)))
         };
         let initial = runtime_state();
-        let mut battle = Battle::new(initial.clone());
+        let mut battle = Battle::with_seed(initial.clone(), 46);
+        let before = battle.clone();
 
         assert_eq!(
             battle.play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0),),
             Err(ActionError::Battle(BattleError::ZeroDefenseStat))
         );
         assert_eq!(battle.state(), &initial);
+        assert_eq!(battle, before); // Failed damage rolls must not advance the random stream.
 
         battle
             .play_turn_with_rosters(&player, &opponent, retry.0, retry.1)
