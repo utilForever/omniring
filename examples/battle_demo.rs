@@ -61,7 +61,10 @@ fn run_demo() -> Result<BattleObservation, ActionError> {
             return Ok(observation);
         }
 
-        assert!(step < 100, "demo did not terminate within 100 steps");
+        if outcome.truncated {
+            println!("Result: turn limit reached; no winner. Total reward: {total_reward:+.3}");
+            return Ok(observation);
+        }
 
         let player_action = next_action(
             observation.player.slot_active(),

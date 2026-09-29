@@ -5,6 +5,11 @@ use crate::{
 };
 use rand::{SeedableRng, rngs::SmallRng};
 
+/// Environment safety limit, not a battle outcome or tournament timer.
+/// Counts successful attack and voluntary-switch turns, excluding team selection
+/// and forced replacements. A terminal result on the last turn takes precedence.
+pub const MAX_EPISODE_TURNS: usize = 1_000;
+
 /// An observation returned to the player during an episode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Observation {
@@ -20,6 +25,7 @@ pub struct Environment<F> {
     // Used during preview; the active battle owns and advances the stream after selection.
     rng: SmallRng,
     opponent_revealed: [bool; 6],
+    elapsed_turns: usize,
     transition: F,
 }
 
@@ -28,6 +34,9 @@ pub struct StepOutcome {
     pub observation: Observation,
     pub reward: f32,
     pub terminated: bool,
+    /// The turn limit was reached without a terminal battle result.
+    /// Stop stepping on either `terminated` or `truncated`, then reset.
+    pub truncated: bool,
     /// Only this step's events, in resolution order; empty for team selection.
     pub events: Vec<BattleEvent>,
 }
@@ -47,7 +56,8 @@ impl Environment<()> {
     /// // During preview, the opponent action is ignored: its team was selected above.
     /// env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
     /// let turn = env.step(Action::Move(0), Action::Move(0))?;
-    /// // Use turn.observation, turn.reward, and turn.terminated for training.
+    /// // Use turn.observation and turn.reward for training.
+    /// // End the episode when turn.terminated || turn.truncated.
     /// # Ok(())
     /// # }
     /// ```
@@ -165,17 +175,20 @@ where
             battle: None,
             rng: SmallRng::seed_from_u64(seed),
             opponent_revealed: [false; 6],
+            elapsed_turns: 0,
             transition,
         })
     }
 
-    /// Restores team preview and initial HP while continuing the random stream.
+    /// Restores team preview, initial HP, and the turn budget while continuing the random stream.
     pub fn reset(&mut self) -> Observation {
         if let Some(battle) = self.battle.take() {
             self.rng = battle.rng;
         }
 
         self.opponent_revealed = [false; 6];
+        self.elapsed_turns = 0;
+
         Observation::TeamPreview(self.preview.clone())
     }
 
@@ -187,6 +200,8 @@ where
         preview
     }
 
+    /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
+    /// After truncation, returns `ActionError::EpisodeTruncated` until reset.
     pub fn step(
         &mut self,
         action: Action,
@@ -219,11 +234,22 @@ where
                 )?),
                 reward: 0.0,
                 terminated: false,
+                truncated: false,
                 events: Vec::new(),
             });
         }
 
         let previous = self.battle.as_ref().unwrap().clone();
+
+        if self.elapsed_turns >= MAX_EPISODE_TURNS && !previous.state().terminated {
+            return Err(ActionError::EpisodeTruncated);
+        }
+
+        let elapsed_turns = self.elapsed_turns
+            + usize::from(
+                previous.state().player.slot_active().is_some()
+                    && previous.state().opponent.slot_active().is_some(),
+            );
         let opponent_revealed = self.opponent_revealed;
         let outcome = (|| {
             let battle = self.battle.as_mut().unwrap();
@@ -244,6 +270,7 @@ where
                 observation: Observation::Battle(observation(state, self.opponent_revealed)?),
                 reward: calculate_reward(previous.state(), state),
                 terminated: state.terminated,
+                truncated: !state.terminated && elapsed_turns >= MAX_EPISODE_TURNS,
                 events: battle.events().to_vec(),
             })
         })();
@@ -251,6 +278,8 @@ where
         if outcome.is_err() {
             self.battle = Some(previous);
             self.opponent_revealed = opponent_revealed;
+        } else {
+            self.elapsed_turns = elapsed_turns;
         }
 
         outcome
@@ -288,7 +317,7 @@ mod tests {
     use rand::RngExt;
     use std::cell::Cell;
 
-    use super::{Environment, Observation};
+    use super::{Environment, MAX_EPISODE_TURNS, Observation};
     use crate::{
         Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
         TeamPreviewObservation, TeamState,
@@ -495,6 +524,20 @@ mod tests {
         assert_eq!(retried.reward, 0.0);
         assert!(!retried.terminated);
         assert_eq!(transitions.get(), 3);
+
+        // Neither a failed transition nor a failed observation consumed a turn.
+        for turn in 2..=MAX_EPISODE_TURNS {
+            let action = Action::Switch((turn - 1) % 2);
+            let outcome = environment.step(action, action).unwrap();
+            assert_eq!(outcome.truncated, turn == MAX_EPISODE_TURNS);
+        }
+
+        let before = environment.battle.clone();
+        assert_eq!(
+            environment.step(Action::Move(0), Action::Move(0)),
+            Err(ActionError::EpisodeTruncated)
+        );
+        assert_eq!(environment.battle, before);
     }
 
     #[test]
@@ -518,9 +561,11 @@ mod tests {
         environment
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
+        environment.elapsed_turns = MAX_EPISODE_TURNS - 3;
 
         let first_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
         assert!(!first_faint.terminated);
+        assert!(!first_faint.truncated);
         assert_eq!(transitions.get(), 1);
 
         let first_replacement = environment
@@ -528,22 +573,66 @@ mod tests {
             .unwrap();
         assert_eq!(first_replacement.reward, 0.0);
         assert!(!first_replacement.terminated);
+        assert!(!first_replacement.truncated);
         assert_eq!(transitions.get(), 1);
 
         let second_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
         assert!(!second_faint.terminated);
+        assert!(!second_faint.truncated);
 
         let second_replacement = environment
             .step(Action::Move(0), Action::Switch(2))
             .unwrap();
         assert_eq!(second_replacement.reward, 0.0);
         assert!(!second_replacement.terminated);
+        assert!(!second_replacement.truncated);
         assert_eq!(transitions.get(), 2);
 
         let final_faint = environment.step(Action::Move(0), Action::Move(0)).unwrap();
         assert!((final_faint.reward - 1.133_333_3).abs() < 1e-6);
         assert!(final_faint.terminated);
+        assert!(!final_faint.truncated);
         assert_eq!(transitions.get(), 3);
+    }
+
+    #[test]
+    fn terminal_results_on_the_last_turn_are_not_truncated() {
+        for (player_hp, opponent_hp, winner, reward) in [
+            ([100; 3], [0; 3], Some(BattleSide::Player), 1.4),
+            ([0; 3], [100; 3], Some(BattleSide::Opponent), -1.4),
+            ([0; 3], [0; 3], None, 0.0),
+        ] {
+            let mut environment = Environment::new(
+                TeamPreviewObservation {
+                    player: roster(100),
+                    opponent: roster(100),
+                },
+                [0, 1, 2],
+                |state, _, _, _| {
+                    state.player = team(player_hp);
+                    state.opponent = team(opponent_hp);
+                    Ok(Vec::new())
+                },
+            )
+            .unwrap();
+            environment
+                .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+                .unwrap();
+            environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
+
+            let outcome = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+            assert!(outcome.terminated);
+            assert!(!outcome.truncated);
+            assert!((outcome.reward - reward).abs() < 1e-6);
+            assert_eq!(
+                outcome.events.last(),
+                Some(&BattleEvent::BattleCompleted { winner })
+            );
+            assert_eq!(
+                environment.step(Action::Move(0), Action::Move(0)),
+                Err(ActionError::BattleTerminated)
+            );
+        }
     }
 
     fn state(opponent_hp: [u32; 3], terminated: bool) -> BattleState {

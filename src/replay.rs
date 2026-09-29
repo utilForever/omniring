@@ -20,20 +20,20 @@ pub struct BattleReplay {
 pub enum ReplayError {
     /// Invalid initial rosters or opponent selection.
     InvalidSetup(ActionError),
-    /// A failed step, including actions supplied after battle termination.
+    /// A failed step, including actions supplied after termination or truncation.
     InvalidAction {
         /// Zero-based index into `BattleReplay::actions`.
         step: usize,
         error: ActionError,
     },
-    /// The actions ended before the battle terminated (including an empty sequence).
+    /// The actions ended before termination or truncation (including an empty sequence).
     Incomplete,
 }
 
 impl BattleReplay {
     /// Replays every action through `Environment::step`, returning its outcomes in order.
-    /// The final outcome contains the terminal observation. The step trace uses the
-    /// existing observations, rewards, events, and termination flags; no separate log is stored.
+    /// The final outcome contains the observation at termination or truncation. The step trace
+    /// uses the existing observations, rewards, events, and flags; no separate log is stored.
     /// Returns the first setup/action error, or `Incomplete` if more actions are needed.
     pub fn run(&self) -> Result<Vec<StepOutcome>, ReplayError> {
         let mut environment = Environment::from_rosters_with_seed(
@@ -53,7 +53,10 @@ impl BattleReplay {
             );
         }
 
-        if !outcomes.last().is_some_and(|outcome| outcome.terminated) {
+        if !outcomes
+            .last()
+            .is_some_and(|outcome| outcome.terminated || outcome.truncated)
+        {
             return Err(ReplayError::Incomplete);
         }
 
