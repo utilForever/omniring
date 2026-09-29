@@ -97,6 +97,35 @@ assert_eq!(env.step(Action::Move(0), Action::Move(0))?, first);
 
 Custom transitions passed to `Battle::play_turn` or `Environment::new` now receive a fourth argument, `&mut SmallRng`: use `|state, action, opponent_action, rng|`, or `_` for the last argument if no randomness is needed. `Environment::new_with_seed(preview, selection, seed, transition)` seeds a custom transition. Use the supplied RNG for random decisions. State captured by a callback is not reset or rolled back by the environment.
 
+### Replay a completed battle
+
+`BattleReplay` stores the initial player and opponent rosters (including HP), opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. The opponent action during team preview is ignored, as in a live episode.
+
+```rust
+use omniring::BattleReplay;
+
+let replay = BattleReplay {
+    player,
+    opponent,
+    opponent_selection: [0, 1, 2],
+    seed: 46,
+    actions, // Recorded pairs from team selection through the terminal step.
+};
+let outcomes = replay.run()?;
+assert!(outcomes.last().unwrap().terminated);
+assert_eq!(replay.run()?, outcomes);
+```
+
+`run()` creates a fresh seeded environment and uses the normal `step` path. It returns every `StepOutcome` in order, preserving observations, rewards, and termination flags; the last observation is the terminal state visible to the player. These step outcomes are the replay's event trace. The input stores no intermediate states, and there is no separate event engine or stable on-disk format. The same library-version and target-platform limits as seeded battles apply.
+
+Errors distinguish invalid setup (`ReplayError::InvalidSetup`), a failed action with its zero-based step index and original `ActionError` (`ReplayError::InvalidAction`), and an empty or unfinished sequence (`ReplayError::Incomplete`). Extra actions after termination fail with `ActionError::BattleTerminated`.
+
+Run the check that records a seeded battle, replays it twice, and checks invalid inputs:
+
+```bash
+cargo test --test environment_battle recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences
+```
+
 ## Development
 
 Run the same core checks used in CI for code changes:
