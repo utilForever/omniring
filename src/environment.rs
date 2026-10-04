@@ -1,7 +1,8 @@
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
-    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleSide, BattleState,
-    OpponentObservation, PokemonState, TeamPreviewObservation, TeamState, calculate_reward,
+    ACTION_SPACE_SIZE, Action, ActionError, Battle, BattleEvent, BattleObservation, BattleSide,
+    BattleState, OpponentObservation, PokemonState, TeamPreviewObservation, TeamState,
+    calculate_reward,
 };
 use rand::{SeedableRng, rngs::SmallRng};
 
@@ -251,20 +252,64 @@ where
     /// Either Trainer can submit a preview selection through `step`.
     /// Terminated or truncated episodes have no legal actions.
     pub fn legal_actions(&self, side: BattleSide) -> Vec<Action> {
+        self.legal_action_mask(side)
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, legal)| legal)
+            .map(|(index, _)| Action::from_index(index).unwrap())
+            .collect()
+    }
+
+    /// Returns one flag per stable action index, using `validate_action` for legality.
+    /// The same length and mapping apply in preview, battle, and forced replacement.
+    /// Terminated or truncated episodes return an all-false mask.
+    pub fn legal_action_mask(&self, side: BattleSide) -> [bool; ACTION_SPACE_SIZE] {
+        std::array::from_fn(|index| {
+            self.validate_action(side, Action::from_index(index).unwrap())
+                .is_ok()
+        })
+    }
+
+    /// Validates a Trainer's action without advancing state or the random stream.
+    /// Preview requires `SelectTeam`, including for the opponent, and a living lead.
+    /// Both `step` and `step_indexed` use these rules.
+    pub fn validate_action(&self, side: BattleSide, action: Action) -> Result<(), ActionError> {
         match &self.battle {
             None => {
+                self.preview.validate_player_action(action)?;
+
+                let Action::SelectTeam(selection) = action else {
+                    return Err(ActionError::WrongPhase);
+                };
                 let roster = match side {
                     BattleSide::Player => &self.preview.player,
                     BattleSide::Opponent => &self.preview.opponent,
                 };
 
-                self.preview.legal_player_actions().into_iter().filter(|action| {
-                    matches!(action, Action::SelectTeam([lead, _, _]) if roster[*lead].hp_curr() > 0)
-                }).collect()
+                selected_team(roster.clone(), selection).map(|_| ())
             }
-            Some(_) if self.elapsed_turns >= MAX_EPISODE_TURNS => Vec::new(),
-            Some(battle) => battle.state().legal_actions(side),
+            Some(battle)
+                if self.elapsed_turns >= MAX_EPISODE_TURNS && !battle.state().terminated =>
+            {
+                Err(ActionError::EpisodeTruncated)
+            }
+            Some(battle) => battle.state().validate_action(side, action),
         }
+    }
+
+    /// Decodes both stable indices and delegates validation and execution to `step`.
+    /// Mask-disabled actions are rejected for either Trainer, including during preview;
+    /// both preview indices must select teams. Invalid indices or actions change no state.
+    pub fn step_indexed(
+        &mut self,
+        action_index: usize,
+        opponent_action_index: usize,
+    ) -> Result<StepOutcome, ActionError> {
+        let action = Action::from_index(action_index).ok_or(ActionError::InvalidActionIndex)?;
+        let opponent_action =
+            Action::from_index(opponent_action_index).ok_or(ActionError::InvalidActionIndex)?;
+
+        self.step(action, opponent_action)
     }
 
     /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
@@ -276,10 +321,10 @@ where
         action: Action,
         opponent_action: Action,
     ) -> Result<StepOutcome, ActionError> {
-        if self.battle.is_none() {
-            self.preview.validate_player_action(action)?;
-            self.preview.validate_player_action(opponent_action)?;
+        self.validate_action(BattleSide::Player, action)?;
+        self.validate_action(BattleSide::Opponent, opponent_action)?;
 
+        if self.battle.is_none() {
             let (Action::SelectTeam(selection), Action::SelectTeam(opponent_selection)) =
                 (action, opponent_action)
             else {
@@ -316,11 +361,6 @@ where
         }
 
         let previous = self.battle.as_ref().unwrap().clone();
-
-        if self.elapsed_turns >= MAX_EPISODE_TURNS && !previous.state().terminated {
-            return Err(ActionError::EpisodeTruncated);
-        }
-
         let elapsed_turns = self.elapsed_turns
             + usize::from(
                 previous.state().player.slot_active().is_some()
