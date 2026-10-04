@@ -79,6 +79,10 @@ These focused checks use the real battle logic to cover reset, team selection, d
 
 `omniring::Battle` owns the runtime `BattleState`. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state unchanged, and observations are independent snapshots.
 
+For direct battles, bind rosters once with `Battle::with_rosters(state, player, opponent)`, then call `play_turn_with_rosters(player_action, opponent_action)`. The battle owns immutable rosters; cloning a battle shares that data while copying its runtime state. Callers migrating from the previous API should move the roster arguments from each turn call to the constructor.
+
+`Battle::new(state)` remains available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
+
 ## Development
 
 Run the same core checks used in CI for code changes:
