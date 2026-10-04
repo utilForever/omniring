@@ -107,6 +107,38 @@ Queries borrow the same canonical battle state and return independent observatio
 
 During preview, observations swap the two public rosters and legal actions list ordered selections for the requested roster, excluding fainted leads (120 choices when all six Pokemon are alive). Submit both Trainers' `SelectTeam` actions through `step`; the opponent's explicit selection overrides the constructor's default for that episode. Invalid selections leave the environment in preview. For compatibility, an opponent `Move` or `Switch` input during preview still uses the constructor's default. Both reset methods retain that default, so policies can choose again each episode. `step` arguments and event side labels always use the original player/opponent identities; `StepOutcome.observation` and `.reward` retain the original player's perspective. Query the environment after each step for the other observation, and use `reward_for` for either reward. Events remain a replay/debug trace that can include unexecuted opposing choices, so they are not a policy observation.
 
+### Fixed observation encoding
+
+Call `Environment::observation(side)?.encode()` to get a `Vec<f64>` from either Trainer's perspective. The concrete `TeamPreviewObservation::encode()` and `BattleObservation::encode()` methods return fixed arrays. Identical observations produce identical values, without changing the environment or its RNG. No tensor dependency or normalization is involved; `f64` preserves every valid `u32` HP value exactly.
+
+The public constants `TEAM_PREVIEW_ENCODING_LEN` (72) and `BATTLE_ENCODING_LEN` (87) define the output lengths. Preview contains only the two rosters. Battle adds selection, active slots, and termination, including during forced replacements and after termination. All offsets below are zero-based, and `a..b` excludes `b`.
+
+| Offsets  | Preview         | Battle                                                  |
+| -------- | --------------- | ------------------------------------------------------- |
+| `0..36`  | Player roster   | Player roster                                           |
+| `36..72` | Opponent roster | Opponent roster                                         |
+| `72..78` | —               | Player selection: `0` unselected, `1` selected          |
+| `78..84` | —               | Opponent selection: `-1` unknown, `1` revealed selected |
+| `84`     | —               | Player active roster slot: `0..=5`, or `-1` if absent   |
+| `85`     | —               | Opponent active roster slot: `0..=5`, or `-1` if absent |
+| `86`     | —               | Terminated: `0` false, `1` true                         |
+
+Each roster contains slots `0..6` in their original order, with six consecutive values per Pokemon: `[hp_curr, hp_max, move_0, move_1, move_2, move_3]`. HP is raw, with `0 <= hp_curr <= hp_max <= 4_294_967_295` and `hp_max >= 1`. Each move field is its availability flag (`0` or `1`) in move-slot order. These are the fields already exposed by the observation structs; species, move identities, and other calculation data are not encoded.
+
+`-1` is the sole unknown/absent sentinel. An unrevealed opponent slot always has selection `-1`, regardless of its hidden selection status. Revealed selections remain `1` after switching out or fainting; other selections are never inferred, even after all three selected slots have appeared. Roster fields retain the existing observation's visibility. `player` always means the requested Trainer. The phase is identified by the observation variant (and output length); no phase tag is added. Rewards, events, and `StepOutcome.truncated` remain separate rollout data.
+
+```rust
+let observation = env.observation(BattleSide::Opponent)?;
+let features = observation.encode();
+assert_eq!(features, observation.clone().encode());
+```
+
+Run the encoding contract and hidden-selection checks:
+
+```bash
+cargo test --test observation_encoding
+```
+
 ### Bounded episodes
 
 Each environment has a fixed safety limit of `omniring::MAX_EPISODE_TURNS` (1,000 turns). Successful attack turns and voluntary switches count, including turns where both sides only switch. Team selection, forced replacement steps, and failed steps do not count. Both `reset()` and `reset_with_seed(seed)` restore the full turn budget.
