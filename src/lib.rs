@@ -1,6 +1,7 @@
 mod action;
 pub mod battle;
 mod damage;
+mod encoding;
 mod environment;
 mod replay;
 mod reward;
@@ -8,6 +9,7 @@ mod state;
 
 pub use action::{Action, ActionError};
 pub use battle::{Battle, BattleEvent, BattleSide};
+pub use encoding::{BATTLE_ENCODING_LEN, TEAM_PREVIEW_ENCODING_LEN};
 pub use environment::{Environment, MAX_EPISODE_TURNS, Observation, StepOutcome};
 pub use replay::{BattleReplay, ReplayError};
 pub use reward::{FAINT_REWARD, HP_PROGRESS_REWARD, LOSS_REWARD, WIN_REWARD, calculate_reward};
