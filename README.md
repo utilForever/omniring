@@ -105,7 +105,44 @@ assert_eq!(opponent_reward, -player_reward);
 
 Queries borrow the same canonical battle state and return independent observation snapshots without advancing the RNG. Battle actions remain ordered by move slot, then roster slot. A fainted side gets only valid replacement switches; terminated or truncated episodes return no legal actions. Direct state users can also call `BattleState::legal_actions(side)` and `validate_action(side, action)`; the existing player-only methods remain available.
 
-During preview, observations swap the two public rosters and legal actions list ordered selections for the requested roster, excluding fainted leads (120 choices when all six Pokemon are alive). Submit both Trainers' `SelectTeam` actions through `step`; the opponent's explicit selection overrides the constructor's default for that episode. Invalid selections leave the environment in preview. For compatibility, an opponent `Move` or `Switch` input during preview still uses the constructor's default. Both reset methods retain that default, so policies can choose again each episode. `step` arguments and event side labels always use the original player/opponent identities; `StepOutcome.observation` and `.reward` retain the original player's perspective. Query the environment after each step for the other observation, and use `reward_for` for either reward. Events remain a replay/debug trace that can include unexecuted opposing choices, so they are not a policy observation.
+During preview, observations swap the two public rosters and legal actions list ordered selections for the requested roster, excluding fainted leads (120 choices when all six Pokemon are alive). Submit both Trainers' `SelectTeam` actions through `step`, including after either reset method. Invalid selections and `Move`/`Switch` inputs from either Trainer leave the environment in preview. The legacy constructor argument `opponent_selection` is still validated at setup, but is not applied automatically; the explicit preview actions determine both teams. `step` arguments and event side labels always use the original player/opponent identities; `StepOutcome.observation` and `.reward` retain the original player's perspective. Query the environment after each step for the other observation, and use `reward_for` for either reward. Events remain a replay/debug trace that can include unexecuted opposing choices, so they are not a policy observation.
+
+### Stable action indices and legal-action masks
+
+`omniring::ACTION_SPACE_SIZE` is **130** for either Trainer in every phase. Indices never depend on the current legal-action list, selected team, active Pokemon, or observation perspective:
+
+| Indices (inclusive) | Action                                                                                                                                                                                                |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0–119               | `Action::SelectTeam([first, second, third])`: all distinct ordered triples of roster slots 0–5, in lexicographic order. Index 0 is `[0, 1, 2]`; index 119 is `[5, 4, 3]`. The first slot is the lead. |
+| 120–123             | `Action::Move(index - 120)`: move slots 0–3                                                                                                                                                           |
+| 124–129             | `Action::Switch(index - 124)`: original roster slots 0–5                                                                                                                                              |
+
+`Action::to_index()` and `Action::from_index(index)` return `Option` and round-trip every supported action. Malformed actions (duplicate selection slots or out-of-range slots) and indices at least 130 return `None`. Conversion only identifies an action; it does not establish legality in the current state.
+
+`Environment::legal_action_mask(side)` returns `[bool; ACTION_SPACE_SIZE]`, with `true` exactly when `Environment::validate_action(side, action)` succeeds. `legal_actions(side)` uses the same mask and preserves index order. Preview enables only selections with a living lead; battle enables available moves and switches to selected, living reserves. A side needing forced replacement can only switch. Termination and truncation disable every index. Both reset methods restore the preview mask. Queries do not advance the state, RNG, reveal history, or turn budget.
+
+```rust
+use omniring::{ACTION_SPACE_SIZE, Action, BattleSide};
+
+let player_mask = env.legal_action_mask(BattleSide::Player);
+let opponent_mask = env.legal_action_mask(BattleSide::Opponent);
+assert_eq!(player_mask.len(), ACTION_SPACE_SIZE);
+let player_index = player_mask.iter().position(|&legal| legal).unwrap();
+let opponent_index = opponent_mask.iter().position(|&legal| legal).unwrap();
+assert_eq!(Action::from_index(player_index).unwrap().to_index(), Some(player_index));
+let outcome = env.step_indexed(player_index, opponent_index)?;
+```
+
+`step_indexed` decodes both indices and delegates validation and execution to `step`. Both APIs reject mask-disabled choices without changing state, RNG, events, reveal history, or the turn budget; out-of-range indices are also rejected. Exhaustive `ActionError` matches must handle the new `InvalidActionIndex` variant. A custom transition can still fail after valid choices; its existing rollback behavior is unchanged.
+
+**Preview API change:** both actions must be `SelectTeam`. Replace old opponent `Move`/`Switch` placeholders with `Action::SelectTeam(opponent_selection)`; they now return `ActionError::WrongPhase`. Apply the same change to recorded replay actions. Constructor signatures and setup validation remain unchanged.
+
+Run the mapping and full-phase mask checks:
+
+```bash
+cargo test stable_indices
+cargo test action_masks
+```
 
 ### Fixed observation encoding
 
@@ -159,11 +196,13 @@ Use `Battle::with_rosters_and_seed(state, player, opponent, seed)` for a direct 
 
 ```rust
 let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46)?;
-env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
+env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))?;
+
 let first = env.step(Action::Move(0), Action::Move(0))?;
 
 env.reset_with_seed(46);
-env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
+env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))?;
+
 assert_eq!(env.step(Action::Move(0), Action::Move(0))?, first);
 ```
 
@@ -197,7 +236,7 @@ The core resolver now checks `Move.accuracy` using the battle-owned RNG before d
 
 ### Replay a completed episode
 
-`BattleReplay` stores the initial player and opponent rosters (including HP), default opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. An explicit opponent `SelectTeam` during preview overrides the default; a `Move` or `Switch` input keeps it, as in a live episode. Previously ignored opponent `SelectTeam` inputs now take effect and must be valid.
+`BattleReplay` stores the initial player and opponent rosters (including HP), legacy setup selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with `Action::SelectTeam` for both Trainers and including voluntary switches and forced replacements. The `opponent_selection` field is still validated at setup; the first recorded opponent action determines its team. Older records with an opponent `Move` or `Switch` placeholder in the first pair must replace it with `Action::SelectTeam(opponent_selection)`.
 
 ```rust
 use omniring::BattleReplay;
