@@ -20,7 +20,6 @@ pub enum Observation {
 /// A minimal episode loop around a battle-state transition function.
 pub struct Environment<F> {
     preview: TeamPreviewObservation,
-    opponent: TeamState,
     battle: Option<Battle>,
     // Used during preview; the active battle owns and advances the stream after selection.
     rng: SmallRng,
@@ -58,6 +57,8 @@ impl Environment<()> {
     /// Creates an environment using the core battle logic and one to four moves per Pokemon.
     /// Roster slots are preserved; the first selected slot is each side's lead.
     /// `reset` restores the supplied HP and returns to team preview, continuing the random stream.
+    /// The legacy `opponent_selection` argument is validated at construction only;
+    /// both Trainers must submit `SelectTeam` actions during preview.
     ///
     /// ```
     /// use omniring::{Action, ActionError, BattleSide, Environment};
@@ -102,6 +103,7 @@ impl Environment<()> {
 
     /// Creates an environment with a reproducible battle random stream.
     /// Use `reset_with_seed` to replay an episode; ordinary `reset` continues the stream.
+    /// `opponent_selection` is validated only, as in `from_rosters`; preview requires both choices.
     #[expect(
         clippy::type_complexity,
         reason = "Reuse the generic environment without boxing its resolver"
@@ -163,6 +165,7 @@ where
 {
     /// Creates an environment with a randomly chosen seed and a custom transition.
     /// The transition receives the battle's RNG as its fourth argument.
+    /// `opponent_selection` is validated only; preview requires both Trainers' `SelectTeam` actions.
     pub fn new(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
@@ -176,6 +179,8 @@ where
     /// Return attack events in resolution order, or `Ok(Vec::new())` for none.
     /// The battle adds move selections, action-driven switches, and completion; custom HP changes must
     /// include their own damage/faint events. Events are trusted, not inferred from HP.
+    /// The legacy `opponent_selection` argument is validated at construction only;
+    /// it is not a fallback for missing preview selections.
     pub fn new_with_seed(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
@@ -183,12 +188,10 @@ where
         transition: F,
     ) -> Result<Self, ActionError> {
         preview.validate_player_action(Action::SelectTeam(opponent_selection))?;
-
-        let opponent = selected_team(preview.opponent.clone(), opponent_selection)?;
+        selected_team(preview.opponent.clone(), opponent_selection)?;
 
         Ok(Self {
             preview,
-            opponent,
             battle: None,
             rng: SmallRng::seed_from_u64(seed),
             player_revealed: [false; 6],
@@ -265,9 +268,8 @@ where
     }
 
     /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
-    /// During preview, an opponent `SelectTeam` overrides the constructor's default
-    /// for this episode. For compatibility, opponent `Move`/`Switch` inputs keep that default.
-    /// Both selections are validated before the battle or reveal history changes.
+    /// Both Trainers must select teams during preview, including after reset.
+    /// Both actions are validated before the battle or reveal history changes.
     /// After truncation, returns `ActionError::EpisodeTruncated` until reset.
     pub fn step(
         &mut self,
@@ -275,18 +277,17 @@ where
         opponent_action: Action,
     ) -> Result<StepOutcome, ActionError> {
         if self.battle.is_none() {
-            let Action::SelectTeam(selection) = action else {
+            self.preview.validate_player_action(action)?;
+            self.preview.validate_player_action(opponent_action)?;
+
+            let (Action::SelectTeam(selection), Action::SelectTeam(opponent_selection)) =
+                (action, opponent_action)
+            else {
                 return Err(ActionError::WrongPhase);
             };
-            self.preview.validate_player_action(action)?;
 
             let player = selected_team(self.preview.player.clone(), selection)?;
-            let opponent = if let Action::SelectTeam(selection) = opponent_action {
-                self.preview.validate_player_action(opponent_action)?;
-                selected_team(self.preview.opponent.clone(), selection)?
-            } else {
-                self.opponent.clone()
-            };
+            let opponent = selected_team(self.preview.opponent.clone(), opponent_selection)?;
 
             self.player_revealed[player.slot_active().unwrap()] = true;
             self.opponent_revealed[opponent.slot_active().unwrap()] = true;
@@ -452,7 +453,7 @@ mod tests {
         )
         .unwrap();
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         let first = environment.step(Action::Move(0), Action::Move(0)).unwrap();
@@ -511,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_selections_are_validated_atomically_and_reset_keeps_the_default() {
+    fn preview_selections_are_validated_atomically_after_each_reset() {
         let mut player_roster = roster(100);
         player_roster[4] = PokemonState::new(0, 100, [true; 4]).unwrap();
 
@@ -576,7 +577,12 @@ mod tests {
             assert_eq!(environment.opponent_revealed, [false; 6]);
         }
 
-        for fallback in [Action::Move(0), Action::Switch(0)] {
+        for (reseed, invalid) in [
+            (false, Action::Move(0)),
+            (true, Action::Switch(0)),
+            (false, Action::Move(usize::MAX)),
+            (true, Action::Switch(usize::MAX)),
+        ] {
             environment
                 .step(player, Action::SelectTeam([4, 3, 2]))
                 .unwrap();
@@ -592,13 +598,32 @@ mod tests {
             );
             assert_eq!(view.player.slot_active(), Some(4));
 
-            if matches!(fallback, Action::Move(_)) {
-                environment.reset();
-            } else {
+            if reseed {
                 environment.reset_with_seed(46);
+            } else {
+                environment.reset();
             }
 
-            environment.step(player, fallback).unwrap();
+            assert_eq!(
+                environment.step(player, invalid),
+                Err(ActionError::WrongPhase)
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Player).unwrap(),
+                preview
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Opponent).unwrap(),
+                reverse
+            );
+            assert_eq!(environment.rng, rng);
+            assert_eq!(environment.player_revealed, [false; 6]);
+            assert_eq!(environment.opponent_revealed, [false; 6]);
+            assert_eq!(environment.elapsed_turns, 0);
+
+            environment
+                .step(player, Action::SelectTeam([0, 1, 2]))
+                .unwrap();
 
             let Observation::Battle(view) = environment.observation(BattleSide::Opponent).unwrap()
             else {
@@ -645,7 +670,7 @@ mod tests {
         );
 
         let selected = environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         assert_eq!(selected.reward, 0.0);
@@ -721,7 +746,7 @@ mod tests {
             .unwrap();
 
         let selected = environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
         let before = environment.battle.clone();
         let reverse_before = environment.observation(BattleSide::Opponent).unwrap();
@@ -795,7 +820,7 @@ mod tests {
         .unwrap();
 
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
         environment.elapsed_turns = MAX_EPISODE_TURNS - 3;
 
@@ -852,7 +877,7 @@ mod tests {
             )
             .unwrap();
             environment
-                .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+                .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
                 .unwrap();
             environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
 
