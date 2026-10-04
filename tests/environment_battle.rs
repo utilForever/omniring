@@ -3,7 +3,7 @@ use omniring::pokedex::build_pokemon_from_pokedex;
 use omniring::{
     Action, ActionError, Battle, BattleEvent, BattleObservation, BattleReplay, BattleSide,
     BattleState, Environment, MAX_EPISODE_TURNS, Observation, PokemonState, ReplayError,
-    StateError, TeamState,
+    StateError, StepOutcome, TeamState,
 };
 
 #[test]
@@ -159,30 +159,51 @@ fn either_trainer_can_query_its_view_without_changing_the_seeded_battle() {
 
 #[test]
 fn switch_only_episode_stops_at_the_turn_limit() {
+    let mut player = roster("Charizard");
+    let mut opponent = roster("Venusaur");
+
+    player[0].current_hp /= 2;
+    player[1].current_hp /= 3;
+    opponent[2].current_hp /= 4;
+
     let mut environment =
-        Environment::from_rosters_with_seed(roster("Charizard"), roster("Venusaur"), [0, 1, 2], 46)
-            .unwrap();
+        Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
 
     for episode in 0..3 {
         let selected = environment
             .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
+
         assert!(!selected.terminated && !selected.truncated);
+        assert_rewards(&selected, 0.0);
 
         let initial = battle_observation(selected.observation);
 
         for turn in 1..=MAX_EPISODE_TURNS {
-            assert_eq!(
-                environment.step(Action::Move(4), Action::Move(0)),
-                Err(ActionError::UnavailableMove)
-            );
+            let before = [BattleSide::Player, BattleSide::Opponent]
+                .map(|side| environment.observation(side).unwrap());
+
+            for (player, opponent) in [
+                (Action::Move(4), Action::Move(0)),
+                (Action::Move(0), Action::Move(4)),
+            ] {
+                assert_eq!(
+                    environment.step(player, opponent),
+                    Err(ActionError::UnavailableMove)
+                );
+                assert_eq!(
+                    [BattleSide::Player, BattleSide::Opponent]
+                        .map(|side| environment.observation(side).unwrap()),
+                    before
+                );
+            }
 
             let action = Action::Switch(turn % 2);
             let outcome = environment.step(action, action).unwrap();
+
             assert!(!outcome.terminated);
             assert_eq!(outcome.truncated, turn == MAX_EPISODE_TURNS);
-            assert_eq!(outcome.reward, 0.0);
-            assert_eq!(outcome.reward_for(BattleSide::Opponent), 0.0);
+            assert_rewards(&outcome, 0.0);
 
             for side in [BattleSide::Player, BattleSide::Opponent] {
                 assert_eq!(
@@ -938,6 +959,20 @@ fn battle_observation(observation: Observation) -> BattleObservation {
     };
 
     observation
+}
+
+fn assert_rewards(outcome: &StepOutcome, expected: f32) {
+    let player = outcome.reward_for(BattleSide::Player);
+    let opponent = outcome.reward_for(BattleSide::Opponent);
+
+    assert!(player.is_finite() && opponent.is_finite());
+    assert_eq!(player, outcome.reward);
+    assert_eq!(player + opponent, 0.0);
+    assert!((player - expected).abs() < 1e-6, "{player} != {expected}");
+
+    if expected == 0.0 {
+        assert_eq!(player, 0.0);
+    }
 }
 
 fn roster(species: &str) -> [Pokemon; 6] {
