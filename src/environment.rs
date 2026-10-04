@@ -462,9 +462,244 @@ mod tests {
 
     use super::{Environment, MAX_EPISODE_TURNS, Observation};
     use crate::{
-        Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
+        ACTION_SPACE_SIZE, Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
         TeamPreviewObservation, TeamState,
     };
+
+    #[test]
+    fn action_masks_match_validation_and_both_step_apis_in_every_phase() {
+        let mut preview = TeamPreviewObservation {
+            player: std::array::from_fn(|_| {
+                PokemonState::new(100, 100, [true, false, true, false]).unwrap()
+            }),
+            opponent: std::array::from_fn(|_| {
+                PokemonState::new(100, 100, [false, true, false, false]).unwrap()
+            }),
+        };
+        preview.player[4] = PokemonState::new(0, 100, [true; 4]).unwrap();
+        preview.opponent[0] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let mut environment =
+            Environment::new_with_seed(preview, [5, 2, 3], 52, |state, action, _, rng| {
+                let _ = rng.random::<u64>();
+
+                state.opponent.damage_active(u32::MAX).unwrap();
+
+                if action == Action::Move(2) {
+                    state.player.damage_active(u32::MAX).unwrap();
+                }
+
+                Ok(Vec::new())
+            })
+            .unwrap();
+        let sides = [BattleSide::Player, BattleSide::Opponent];
+
+        // Restore successful candidates to exercise every index against the same state.
+        // The transition above has no captured side effects to restore.
+        let check_masks = |env: &mut Environment<_>| {
+            let snapshot = (
+                env.battle.clone(),
+                env.rng.clone(),
+                env.player_revealed,
+                env.opponent_revealed,
+                env.elapsed_turns,
+            );
+            let masks: [[bool; ACTION_SPACE_SIZE]; 2] =
+                sides.map(|side| env.legal_action_mask(side));
+
+            for (side_index, side) in sides.into_iter().enumerate() {
+                let mut enabled = Vec::new();
+                let other = masks[1 - side_index]
+                    .iter()
+                    .position(|&legal| legal)
+                    .unwrap_or(120);
+
+                for (index, legal) in masks[side_index].into_iter().enumerate() {
+                    let action = Action::from_index(index).unwrap();
+
+                    assert_eq!(env.validate_action(side, action).is_ok(), legal);
+
+                    let (player, opponent) = if side_index == 0 {
+                        (index, other)
+                    } else {
+                        (other, index)
+                    };
+                    let [typed, indexed] = [false, true].map(|indexed| {
+                        let result = if indexed {
+                            env.step_indexed(player, opponent)
+                        } else {
+                            env.step(
+                                Action::from_index(player).unwrap(),
+                                Action::from_index(opponent).unwrap(),
+                            )
+                        };
+
+                        assert_eq!(
+                            result.is_ok(),
+                            legal,
+                            "{side:?}: {action:?}, indexed={indexed}"
+                        );
+
+                        if !legal {
+                            assert_eq!(
+                                (
+                                    &env.battle,
+                                    &env.rng,
+                                    env.player_revealed,
+                                    env.opponent_revealed,
+                                    env.elapsed_turns
+                                ),
+                                (&snapshot.0, &snapshot.1, snapshot.2, snapshot.3, snapshot.4),
+                            );
+                        }
+                        (
+                            env.battle,
+                            env.rng,
+                            env.player_revealed,
+                            env.opponent_revealed,
+                            env.elapsed_turns,
+                        ) = snapshot.clone();
+                        result
+                    });
+
+                    assert_eq!(typed, indexed);
+
+                    if legal {
+                        enabled.push(action);
+                    }
+                }
+
+                assert_eq!(env.legal_actions(side), enabled);
+            }
+
+            for index in [ACTION_SPACE_SIZE, usize::MAX] {
+                for (player, opponent) in [(index, 0), (0, index)] {
+                    assert_eq!(
+                        env.step_indexed(player, opponent),
+                        Err(ActionError::InvalidActionIndex)
+                    );
+                }
+            }
+
+            assert_eq!(
+                (
+                    env.battle.clone(),
+                    env.rng.clone(),
+                    env.player_revealed,
+                    env.opponent_revealed,
+                    env.elapsed_turns
+                ),
+                snapshot,
+            );
+        };
+
+        let preview_masks = sides.map(|side| environment.legal_action_mask(side));
+
+        for (mask, fainted_lead) in preview_masks.iter().zip([4, 0]) {
+            assert_eq!(mask.iter().filter(|&&legal| legal).count(), 100);
+            assert!(mask[120..].iter().all(|&legal| !legal));
+
+            for (index, &legal) in mask[..120].iter().enumerate() {
+                let Action::SelectTeam([lead, _, _]) = Action::from_index(index).unwrap() else {
+                    unreachable!()
+                };
+
+                assert_eq!(legal, lead != fainted_lead);
+            }
+        }
+
+        check_masks(&mut environment);
+
+        let selection = Action::SelectTeam([1, 3, 4]);
+
+        environment
+            .step_indexed(selection.to_index().unwrap(), 113)
+            .unwrap(); // [5, 3, 1]
+
+        assert_eq!(
+            environment.legal_actions(sides[0]),
+            vec![Action::Move(0), Action::Move(2), Action::Switch(3)]
+        );
+        assert_eq!(
+            environment.legal_actions(sides[1]),
+            vec![Action::Move(1), Action::Switch(1), Action::Switch(3)]
+        );
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(120, 121).unwrap(); // Only the opponent faints.
+
+        assert_eq!(
+            environment.legal_actions(sides[1]),
+            vec![Action::Switch(1), Action::Switch(3)]
+        );
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(120, 125).unwrap();
+        environment.step_indexed(122, 121).unwrap(); // Both sides need replacement.
+
+        for side in sides {
+            assert_eq!(environment.legal_actions(side), vec![Action::Switch(3)]);
+        }
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(127, 127).unwrap();
+
+        assert!(environment.step_indexed(122, 121).unwrap().terminated);
+
+        for side in sides {
+            assert_eq!(
+                environment.legal_action_mask(side),
+                [false; ACTION_SPACE_SIZE]
+            );
+            assert_eq!(
+                environment.validate_action(side, Action::Move(0)),
+                Err(ActionError::BattleTerminated)
+            );
+        }
+
+        check_masks(&mut environment);
+
+        environment.reset();
+
+        assert_eq!(
+            sides.map(|side| environment.legal_action_mask(side)),
+            preview_masks
+        );
+
+        environment
+            .step_indexed(selection.to_index().unwrap(), 113)
+            .unwrap();
+        environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
+
+        check_masks(&mut environment);
+
+        assert!(environment.step_indexed(127, 125).unwrap().truncated);
+
+        for side in sides {
+            assert_eq!(
+                environment.legal_action_mask(side),
+                [false; ACTION_SPACE_SIZE]
+            );
+            assert_eq!(
+                environment.validate_action(side, Action::Move(0)),
+                Err(ActionError::EpisodeTruncated)
+            );
+        }
+
+        check_masks(&mut environment);
+
+        environment.reset_with_seed(52);
+
+        assert_eq!(
+            sides.map(|side| environment.legal_action_mask(side)),
+            preview_masks
+        );
+
+        check_masks(&mut environment);
+    }
 
     #[test]
     fn custom_events_are_forwarded_and_failed_steps_preserve_previous_events() {
