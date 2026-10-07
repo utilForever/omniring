@@ -2,12 +2,14 @@ mod action;
 pub mod battle;
 mod damage;
 mod environment;
+mod replay;
 mod reward;
 mod state;
 
 pub use action::{Action, ActionError};
 pub use battle::Battle;
 pub use environment::{Environment, Observation, StepOutcome};
+pub use replay::{BattleReplay, ReplayError};
 pub use reward::{FAINT_REWARD, HP_PROGRESS_REWARD, LOSS_REWARD, WIN_REWARD, calculate_reward};
 pub use state::{
     BattleObservation, BattleState, OpponentObservation, PokemonState, StateError,

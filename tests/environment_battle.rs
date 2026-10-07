@@ -1,8 +1,8 @@
 use omniring::info::{BattleError, Nature, Pokemon, StatPoints};
 use omniring::pokedex::build_pokemon_from_pokedex;
 use omniring::{
-    Action, ActionError, Battle, BattleObservation, BattleState, Environment, Observation,
-    PokemonState, StateError, TeamState,
+    Action, ActionError, Battle, BattleObservation, BattleReplay, BattleState, Environment,
+    Observation, PokemonState, ReplayError, StateError, TeamState,
 };
 
 #[test]
@@ -414,6 +414,181 @@ fn roster(species: &str) -> [Pokemon; 6] {
     .unwrap();
 
     std::array::from_fn(|_| pokemon.clone())
+}
+
+#[test]
+fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
+    let player_selection = [4, 1, 3];
+    let opponent_selection = [5, 2, 0];
+    let initial_player = roster("Charizard").map(|mut pokemon| {
+        pokemon.current_hp -= 7;
+        pokemon
+    });
+    let initial_opponent = initial_player.clone().map(|mut pokemon| {
+        pokemon.current_hp -= 5;
+        pokemon
+    });
+
+    for seed in [46, 47] {
+        let mut replay = BattleReplay {
+            player: initial_player.clone(),
+            opponent: initial_opponent.clone(),
+            opponent_selection,
+            seed,
+            actions: Vec::new(),
+        };
+        let mut live = Environment::from_rosters_with_seed(
+            replay.player.clone(),
+            replay.opponent.clone(),
+            opponent_selection,
+            seed,
+        )
+        .unwrap();
+        let mut expected = Vec::new();
+
+        // Include team selection and voluntary switches before recording a complete battle.
+        for actions in [
+            (Action::SelectTeam(player_selection), Action::Move(0)),
+            (Action::Switch(1), Action::Move(2)),
+            (Action::Move(2), Action::Switch(2)),
+        ] {
+            expected.push(live.step(actions.0, actions.1).unwrap());
+            replay.actions.push(actions);
+        }
+
+        while !expected.last().unwrap().terminated {
+            assert!(expected.len() < 100, "seeded episode failed to terminate");
+
+            let Observation::Battle(observation) = &expected.last().unwrap().observation else {
+                panic!("expected a battle after team selection");
+            };
+            let next_action =
+                |active: Option<usize>, team: &[PokemonState; 6], selection: [usize; 3]| {
+                    if active.is_some() {
+                        Action::Move(2)
+                    } else {
+                        Action::Switch(
+                            selection
+                                .into_iter()
+                                .find(|&slot| team[slot].hp_curr() > 0)
+                                .unwrap(),
+                        )
+                    }
+                };
+            let actions = (
+                next_action(
+                    observation.player.slot_active(),
+                    observation.player.roster(),
+                    player_selection,
+                ),
+                next_action(
+                    observation.opponent.slot_active(),
+                    observation.opponent.roster(),
+                    opponent_selection,
+                ),
+            );
+
+            expected.push(live.step(actions.0, actions.1).unwrap());
+            replay.actions.push(actions);
+        }
+
+        let terminal = battle_observation(expected.last().unwrap().observation.clone());
+
+        assert!(terminal.terminated);
+        assert_ne!(
+            terminal.player.slot_active().is_none(),
+            terminal.opponent.slot_active().is_none()
+        );
+        assert!(expected[..expected.len() - 1].iter().any(|step| matches!(
+            &step.observation,
+            Observation::Battle(state) if state.player.slot_active().is_none() || state.opponent.slot_active().is_none()
+        )));
+        // Compare every observation, reward, and termination flag, including the terminal state.
+        assert_eq!(replay.run().unwrap(), expected);
+        assert_eq!(replay.run().unwrap(), expected);
+        assert_eq!(replay.player, initial_player);
+        assert_eq!(replay.opponent, initial_opponent);
+
+        let complete_actions = replay.actions.clone();
+        replay.actions.push((Action::Move(2), Action::Move(2)));
+
+        assert_eq!(
+            replay.run(),
+            Err(ReplayError::InvalidAction {
+                step: complete_actions.len(),
+                error: ActionError::BattleTerminated,
+            })
+        );
+
+        for length in [0, 1, complete_actions.len() - 1] {
+            replay.actions = complete_actions[..length].to_vec();
+            assert_eq!(replay.run(), Err(ReplayError::Incomplete));
+        }
+
+        for (step, actions, error) in [
+            (
+                0,
+                (Action::Move(0), Action::Move(0)),
+                ActionError::WrongPhase,
+            ),
+            (
+                0,
+                (Action::SelectTeam([0, 0, 1]), Action::Move(0)),
+                ActionError::InvalidTeamSelection,
+            ),
+            (
+                1,
+                (Action::Move(4), Action::Move(2)),
+                ActionError::UnavailableMove,
+            ),
+            (
+                1,
+                (Action::Move(2), Action::Move(4)),
+                ActionError::UnavailableMove,
+            ),
+            (
+                1,
+                (Action::Switch(0), Action::Move(2)),
+                ActionError::InvalidSwitch,
+            ),
+        ] {
+            replay.actions = complete_actions.clone();
+            replay.actions[step] = actions;
+
+            assert_eq!(
+                replay.run(),
+                Err(ReplayError::InvalidAction { step, error })
+            );
+        }
+
+        replay.actions = complete_actions;
+        replay.opponent_selection = [0, 0, 1];
+
+        assert_eq!(
+            replay.run(),
+            Err(ReplayError::InvalidSetup(ActionError::InvalidTeamSelection))
+        );
+
+        replay.opponent_selection = opponent_selection;
+
+        for player_side in [true, false] {
+            let mut invalid = replay.clone();
+            let roster = if player_side {
+                &mut invalid.player
+            } else {
+                &mut invalid.opponent
+            };
+
+            roster[0].moves.clear();
+
+            assert_eq!(
+                invalid.run(),
+                Err(ReplayError::InvalidSetup(ActionError::Battle(
+                    BattleError::InvalidMoveCount { count: 0 }
+                )))
+            );
+        }
+    }
 }
 
 fn runtime_team(hp: u32, mask: [bool; 4]) -> TeamState {
