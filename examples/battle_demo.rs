@@ -3,6 +3,7 @@ use omniring::pokedex::build_pokemon_from_pokedex;
 use omniring::{Action, ActionError, BattleObservation, Environment, Observation, PokemonState};
 
 const SELECTION: [usize; 3] = [0, 1, 2];
+const SEED: u64 = 46;
 
 fn main() -> Result<(), ActionError> {
     run_demo().map(|_| ())
@@ -26,8 +27,9 @@ fn run_demo() -> Result<BattleObservation, ActionError> {
         opponent[0].moves[0].name,
     );
     println!("Each roster has six copies; both select slots {SELECTION:?}.");
+    println!("Battle seed: {SEED}");
 
-    let mut environment = Environment::from_rosters(player, opponent, SELECTION)?;
+    let mut environment = Environment::from_rosters_with_seed(player, opponent, SELECTION, SEED)?;
     environment.reset();
 
     let mut outcome = environment.step(Action::SelectTeam(SELECTION), Action::Move(0))?;

@@ -59,7 +59,7 @@ cargo run --example battle_demo
 
 The scripted demo creates a level-50 Charizard and Venusaur with four moves each, then copies each Pokemon into a six-Pokemon roster. Both Trainers select slots `[0, 1, 2]` and field one Pokemon at a time. Each side uses its first move and automatically replaces fainted Pokemon until one selected team is defeated.
 
-The output shows HP, actions (zero-based slots), step rewards, and the winner with the total reward. Damage rolls can vary between runs. Forced replacements are separate steps and do not consume an attack turn. The demo fails if it cannot finish within 100 steps.
+The output shows the seed, HP, actions (zero-based slots), step rewards, and the winner with the total reward. The demo uses seed `46` to reproduce its damage rolls. Forced replacements are separate steps and do not consume an attack turn. The demo fails if it cannot finish within 100 steps.
 
 Its end-to-end self-check runs with `cargo test --all`, or on its own:
 
@@ -77,11 +77,29 @@ These focused checks use the real battle logic to cover reset, team selection, d
 
 ### Battle runtime state
 
-`omniring::Battle` owns the runtime `BattleState`. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state unchanged, and observations are independent snapshots.
+`omniring::Battle` owns the runtime `BattleState` and its random stream. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state and random stream unchanged, and observations are independent snapshots. Cloning a battle preserves its current random stream.
 
-For direct battles, bind rosters once with `Battle::with_rosters(state, player, opponent)`, then call `play_turn_with_rosters(player_action, opponent_action)`. The battle owns immutable rosters; cloning a battle shares that data while copying its runtime state. Callers migrating from the previous API should move the roster arguments from each turn call to the constructor.
+For direct battles, bind rosters once with `Battle::with_rosters(state, player, opponent)`, then call `play_turn_with_rosters(player_action, opponent_action)`. The battle owns immutable rosters; cloning a battle shares that data while copying its runtime state and random stream. Callers migrating from the previous API should move the roster arguments from each turn call to the constructor.
 
-`Battle::new(state)` remains available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
+`Battle::new(state)` and `Battle::with_seed(state, seed)` remain available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state or random stream. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
+
+### Reproducible battles
+
+Use `Battle::with_rosters_and_seed(state, player, opponent, seed)` for a direct battle or `Environment::from_rosters_with_seed(player, opponent, selection, seed)` for an environment. Speed ties and damage rolls draw from one battle-owned RNG. The existing constructors choose a random seed once at construction.
+
+```rust
+let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46)?;
+env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
+let first = env.step(Action::Move(0), Action::Move(0))?;
+
+env.reset_with_seed(46);
+env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))?;
+assert_eq!(env.step(Action::Move(0), Action::Move(0))?, first);
+```
+
+`reset()` restores the initial HP and team preview while continuing the random stream. `reset_with_seed(seed)` also restarts that stream. Reproduction requires the same initial state, rosters, seed, action sequence, library versions, and target platform; `rand::rngs::SmallRng` does not promise identical results across versions or platforms.
+
+Custom transitions passed to `Battle::play_turn` or `Environment::new` now receive a fourth argument, `&mut SmallRng`: use `|state, action, opponent_action, rng|`, or `_` for the last argument if no randomness is needed. `Environment::new_with_seed(preview, selection, seed, transition)` seeds a custom transition. Use the supplied RNG for random decisions. State captured by a callback is not reset or rolled back by the environment.
 
 ## Development
 

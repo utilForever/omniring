@@ -3,6 +3,7 @@ use crate::{
     Action, ActionError, Battle, BattleObservation, BattleState, OpponentObservation, PokemonState,
     TeamPreviewObservation, TeamState, calculate_reward,
 };
+use rand::{SeedableRng, rngs::SmallRng};
 
 /// An observation returned to the player during an episode.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub struct Environment<F> {
     preview: TeamPreviewObservation,
     opponent: TeamState,
     battle: Option<Battle>,
+    // Used during preview; the active battle owns and advances the stream after selection.
+    rng: SmallRng,
     opponent_revealed: [bool; 6],
     transition: F,
 }
@@ -30,7 +33,7 @@ pub struct StepOutcome {
 impl Environment<()> {
     /// Creates an environment using the core battle logic and one to four moves per Pokemon.
     /// Roster slots are preserved; the first selected slot is each side's lead.
-    /// `reset` restores the supplied HP and returns to team preview.
+    /// `reset` restores the supplied HP and returns to team preview, continuing the random stream.
     ///
     /// ```
     /// use omniring::{Action, ActionError, Environment};
@@ -55,7 +58,29 @@ impl Environment<()> {
         opponent: [Pokemon; 6],
         opponent_selection: [usize; 3],
     ) -> Result<
-        Environment<impl FnMut(&mut BattleState, Action, Action) -> Result<(), ActionError>>,
+        Environment<
+            impl FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
+        >,
+        ActionError,
+    > {
+        Self::from_rosters_with_seed(player, opponent, opponent_selection, rand::random())
+    }
+
+    /// Creates an environment with a reproducible battle random stream.
+    /// Use `reset_with_seed` to replay an episode; ordinary `reset` continues the stream.
+    #[expect(
+        clippy::type_complexity,
+        reason = "Reuse the generic environment without boxing its resolver"
+    )]
+    pub fn from_rosters_with_seed(
+        player: [Pokemon; 6],
+        opponent: [Pokemon; 6],
+        opponent_selection: [usize; 3],
+        seed: u64,
+    ) -> Result<
+        Environment<
+            impl FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
+        >,
         ActionError,
     > {
         let preview = TeamPreviewObservation {
@@ -63,11 +88,12 @@ impl Environment<()> {
             opponent: preview_roster(&opponent)?,
         };
 
-        Environment::new(
+        Environment::new_with_seed(
             preview,
             opponent_selection,
-            move |state, action, opponent_action| {
-                Battle::resolve_turn(state, &player, &opponent, action, opponent_action)
+            seed,
+            move |state, action, opponent_action, rng| {
+                Battle::resolve_turn(state, &player, &opponent, action, opponent_action, rng)
             },
         )
     }
@@ -89,11 +115,24 @@ fn preview_roster(roster: &[Pokemon; 6]) -> Result<[PokemonState; 6], ActionErro
 
 impl<F> Environment<F>
 where
-    F: FnMut(&mut BattleState, Action, Action) -> Result<(), ActionError>,
+    F: FnMut(&mut BattleState, Action, Action, &mut SmallRng) -> Result<(), ActionError>,
 {
+    /// Creates an environment with a randomly chosen seed and a custom transition.
+    /// The transition receives the battle's RNG as its fourth argument.
     pub fn new(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
+        transition: F,
+    ) -> Result<Self, ActionError> {
+        Self::new_with_seed(preview, opponent_selection, rand::random(), transition)
+    }
+
+    /// Creates a seeded environment. Custom transitions must use the supplied RNG for
+    /// random decisions; state captured by the callback is not reset or rolled back.
+    pub fn new_with_seed(
+        preview: TeamPreviewObservation,
+        opponent_selection: [usize; 3],
+        seed: u64,
         transition: F,
     ) -> Result<Self, ActionError> {
         preview.validate_player_action(Action::SelectTeam(opponent_selection))?;
@@ -104,15 +143,28 @@ where
             preview,
             opponent,
             battle: None,
+            rng: SmallRng::seed_from_u64(seed),
             opponent_revealed: [false; 6],
             transition,
         })
     }
 
+    /// Restores team preview and initial HP while continuing the random stream.
     pub fn reset(&mut self) -> Observation {
-        self.battle = None;
+        if let Some(battle) = self.battle.take() {
+            self.rng = battle.rng;
+        }
+
         self.opponent_revealed = [false; 6];
         Observation::TeamPreview(self.preview.clone())
+    }
+
+    /// Restores team preview and restarts the random stream from `seed`.
+    /// The same rosters, seed, and actions reproduce an episode with the same library versions and target platform.
+    pub fn reset_with_seed(&mut self, seed: u64) -> Observation {
+        let preview = self.reset();
+        self.rng = SmallRng::seed_from_u64(seed);
+        preview
     }
 
     pub fn step(
@@ -131,11 +183,14 @@ where
 
             self.opponent_revealed[opponent.slot_active().unwrap()] = true;
 
-            let battle = self.battle.insert(Battle::new(BattleState {
-                player,
-                opponent,
-                terminated: false,
-            }));
+            let battle = self.battle.insert(Battle::with_rng(
+                BattleState {
+                    player,
+                    opponent,
+                    terminated: false,
+                },
+                self.rng.clone(),
+            ));
 
             return Ok(StepOutcome {
                 observation: Observation::Battle(observation(
@@ -206,6 +261,7 @@ fn observation(
 
 #[cfg(test)]
 mod tests {
+    use rand::RngExt;
     use std::cell::Cell;
 
     use super::{Environment, Observation};
@@ -237,12 +293,12 @@ mod tests {
             opponent: roster(100),
         };
 
-        assert!(Environment::new(preview.clone(), [0, 0, 1], |_, _, _| Ok(())).is_err());
+        assert!(Environment::new(preview.clone(), [0, 0, 1], |_, _, _, _| Ok(())).is_err());
 
         let terminal = state([0; 3], true);
         let transitions = Cell::new(0);
         let mut environment =
-            Environment::new(preview.clone(), [0, 1, 2], |state, player, opponent| {
+            Environment::new(preview.clone(), [0, 1, 2], |state, player, opponent, _| {
                 assert_eq!((player, opponent), (Action::Move(0), Action::Move(0)));
                 transitions.set(transitions.get() + 1);
                 *state = terminal.clone();
@@ -304,40 +360,45 @@ mod tests {
             opponent: roster(100),
         };
         let transitions = Cell::new(0);
-        let mut environment = Environment::new(preview, [0, 1, 2], |state, _, _| {
-            let turn = transitions.get();
-            transitions.set(turn + 1);
+        let mut environment =
+            Environment::new_with_seed(preview, [0, 1, 2], 46, |state, _, _, rng| {
+                let turn = transitions.get();
+                transitions.set(turn + 1);
+                let _ = rng.random::<u64>();
 
-            match turn {
-                0 => {
-                    state.terminated = true;
-                    Err(ActionError::InvalidSwitch)
+                match turn {
+                    0 => {
+                        state.terminated = true;
+                        Err(ActionError::InvalidSwitch)
+                    }
+                    1 => {
+                        state.opponent = TeamState::new(
+                            roster(100),
+                            [false, true, true, true, false, false],
+                            Some(1),
+                        )
+                        .unwrap();
+                        Ok(())
+                    }
+                    _ => Ok(()),
                 }
-                1 => {
-                    state.opponent = TeamState::new(
-                        roster(100),
-                        [false, true, true, true, false, false],
-                        Some(1),
-                    )
-                    .unwrap();
-                    Ok(())
-                }
-                _ => Ok(()),
-            }
-        })
-        .unwrap();
+            })
+            .unwrap();
 
         let selected = environment
             .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
             .unwrap();
+        let before = environment.battle.clone();
         assert_eq!(
             environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidSwitch)
         );
+        assert_eq!(environment.battle, before);
         assert_eq!(
             environment.step(Action::Move(0), Action::Switch(1)),
             Err(ActionError::InvalidTeamSelection)
         );
+        assert_eq!(environment.battle, before);
 
         let retried = environment.step(Action::Move(0), Action::Move(0)).unwrap();
 
@@ -354,7 +415,7 @@ mod tests {
             opponent: roster(100),
         };
         let transitions = Cell::new(0);
-        let mut environment = Environment::new(preview, [0, 1, 2], |state, player, opponent| {
+        let mut environment = Environment::new(preview, [0, 1, 2], |state, player, opponent, _| {
             if !matches!((player, opponent), (Action::Move(_), Action::Move(_))) {
                 return Err(ActionError::WrongPhase);
             }
