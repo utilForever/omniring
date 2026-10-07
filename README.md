@@ -79,9 +79,13 @@ These focused checks use the real battle logic to cover reset, team selection, d
 
 `omniring::Battle` owns the runtime `BattleState` and its random stream. Both direct battles and `Environment::from_rosters` use the same resolver. Supplied Pokemon rosters provide calculation data; live HP, selection, active slots, and move availability come from `BattleState`. Failed turns leave the stored state and random stream unchanged, and observations are independent snapshots. Cloning a battle preserves its current random stream.
 
+For direct battles, bind rosters once with `Battle::with_rosters(state, player, opponent)`, then call `play_turn_with_rosters(player_action, opponent_action)`. The battle owns immutable rosters; cloning a battle shares that data while copying its runtime state and random stream. Callers migrating from the previous API should move the roster arguments from each turn call to the constructor.
+
+`Battle::new(state)` and `Battle::with_seed(state, seed)` remain available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state or random stream. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
+
 ### Reproducible battles
 
-Use `Battle::with_seed(state, seed)` for a direct battle or `Environment::from_rosters_with_seed(player, opponent, selection, seed)` for an environment. Speed ties and damage rolls draw from one battle-owned RNG. The existing constructors choose a random seed once at construction.
+Use `Battle::with_rosters_and_seed(state, player, opponent, seed)` for a direct battle or `Environment::from_rosters_with_seed(player, opponent, selection, seed)` for an environment. Speed ties and damage rolls draw from one battle-owned RNG. The existing constructors choose a random seed once at construction.
 
 ```rust
 let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46)?;

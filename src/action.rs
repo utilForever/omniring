@@ -17,6 +17,7 @@ pub enum ActionError {
     InvalidSwitch,
     WrongPhase,
     BattleTerminated,
+    MissingRosters,
     InvalidState(StateError),
     Battle(BattleError),
 }
