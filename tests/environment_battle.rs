@@ -856,19 +856,19 @@ fn cloned_battles_replay_the_same_random_turns() {
     let player = roster("Charizard");
     let opponent = roster("Charizard");
 
-    let mut original = Battle::new(runtime_state());
+    let mut original = Battle::with_rosters(runtime_state(), player, opponent);
     original
-        .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+        .play_turn_with_rosters(Action::Move(0), Action::Move(0))
         .unwrap();
 
     let mut replay = original.clone();
 
     for _ in 0..16 {
         let actual = original
-            .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+            .play_turn_with_rosters(Action::Move(0), Action::Move(0))
             .unwrap();
         let expected = replay
-            .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+            .play_turn_with_rosters(Action::Move(0), Action::Move(0))
             .unwrap();
         assert_eq!(actual, expected);
     }
@@ -885,13 +885,15 @@ fn seeded_speed_ties_replay_without_fixing_the_winner() {
     let mut winners = [false; 2];
 
     for seed in 0..32 {
-        let mut first = Battle::with_seed(initial.clone(), seed);
-        let mut replay = Battle::with_seed(initial.clone(), seed);
+        let mut first =
+            Battle::with_rosters_and_seed(initial.clone(), roster.clone(), roster.clone(), seed);
+        let mut replay =
+            Battle::with_rosters_and_seed(initial.clone(), roster.clone(), roster.clone(), seed);
         let actual = first
-            .play_turn_with_rosters(&roster, &roster, Action::Move(0), Action::Move(0))
+            .play_turn_with_rosters(Action::Move(0), Action::Move(0))
             .unwrap();
         let expected = replay
-            .play_turn_with_rosters(&roster, &roster, Action::Move(0), Action::Move(0))
+            .play_turn_with_rosters(Action::Move(0), Action::Move(0))
             .unwrap();
 
         assert_eq!(actual, expected, "seed {seed}");
@@ -1031,6 +1033,35 @@ fn failed_turn_preserves_randomness_for_the_next_valid_turn() {
 }
 
 #[test]
+fn direct_battle_keeps_its_rosters_across_turns() {
+    let mut player = roster("Charizard");
+    let mut opponent = roster("Charizard");
+    let initial = runtime_state();
+    let mut battle = Battle::with_rosters(initial.clone(), player.clone(), opponent.clone());
+
+    battle
+        .play_turn_with_rosters(Action::Move(3), Action::Move(3))
+        .unwrap();
+
+    player[0].moves.clear();
+    opponent[0].moves.clear();
+
+    battle
+        .play_turn_with_rosters(Action::Move(3), Action::Move(3))
+        .unwrap();
+
+    assert_eq!(battle.state(), &initial);
+
+    let mut cloned = battle.clone();
+    cloned
+        .play_turn_with_rosters(Action::Move(0), Action::Move(0))
+        .unwrap();
+
+    assert!(cloned.state().opponent.roster()[0].hp_curr() < 100_000);
+    assert_eq!(battle.state(), &initial);
+}
+
+#[test]
 fn direct_battle_uses_canonical_hp_for_either_turn_order() {
     for player_faster in [true, false] {
         let (mut player, mut opponent) = if player_faster {
@@ -1044,12 +1075,12 @@ fn direct_battle_uses_canonical_hp_for_either_turn_order() {
         }
 
         let original_rosters = (player.clone(), opponent.clone());
-        let mut battle = Battle::new(runtime_state());
+        let mut battle = Battle::with_rosters(runtime_state(), player.clone(), opponent.clone());
 
         for _ in 0..2 {
             let previous = battle.state().clone();
             let next = battle
-                .play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0))
+                .play_turn_with_rosters(Action::Move(0), Action::Move(0))
                 .unwrap();
 
             for (before, after) in [
@@ -1071,7 +1102,7 @@ fn direct_battle_keeps_runtime_move_availability() {
     let player = roster("Charizard");
     let opponent = roster("Venusaur");
 
-    let mut battle = Battle::new(runtime_state());
+    let mut battle = Battle::with_rosters(runtime_state(), player.clone(), opponent.clone());
     battle
         .play_turn(Action::Move(0), Action::Move(0), |state, _, _, _| {
             state.player = runtime_team(100_000, [true, false, true, true]);
@@ -1083,13 +1114,13 @@ fn direct_battle_keeps_runtime_move_availability() {
 
     assert!(!previous.legal_player_actions().contains(&Action::Move(1)));
     assert_eq!(
-        battle.play_turn_with_rosters(&player, &opponent, Action::Move(1), Action::Move(0),),
+        battle.play_turn_with_rosters(Action::Move(1), Action::Move(0)),
         Err(ActionError::UnavailableMove)
     );
     assert_eq!(battle.state(), &previous);
 
     battle
-        .play_turn_with_rosters(&player, &opponent, Action::Move(3), Action::Move(0))
+        .play_turn_with_rosters(Action::Move(3), Action::Move(0))
         .unwrap();
 
     assert_eq!(battle.state(), &previous); // Protect changes neither HP nor mask.
@@ -1097,18 +1128,15 @@ fn direct_battle_keeps_runtime_move_availability() {
     let mut incomplete_player = player;
     incomplete_player[0].moves.truncate(1);
 
+    let mut incomplete_battle = Battle::with_rosters(previous.clone(), incomplete_player, opponent);
+
     assert_eq!(
-        battle.play_turn_with_rosters(
-            &incomplete_player,
-            &opponent,
-            Action::Move(2),
-            Action::Move(0),
-        ),
+        incomplete_battle.play_turn_with_rosters(Action::Move(2), Action::Move(0)),
         Err(ActionError::Battle(BattleError::InvalidMoveIndex {
             index: 2
         }))
     );
-    assert_eq!(battle.state(), &previous);
+    assert_eq!(incomplete_battle.state(), &previous);
 }
 
 #[test]
@@ -1124,19 +1152,17 @@ fn direct_battle_rolls_back_an_error_after_the_first_attack() {
             (slower, faster, (Action::Move(0), Action::Move(3)))
         };
         let initial = runtime_state();
-        let mut battle = Battle::with_seed(initial.clone(), 46);
+        let mut battle = Battle::with_rosters_and_seed(initial.clone(), player, opponent, 46);
         let before = battle.clone();
 
         assert_eq!(
-            battle.play_turn_with_rosters(&player, &opponent, Action::Move(0), Action::Move(0),),
+            battle.play_turn_with_rosters(Action::Move(0), Action::Move(0)),
             Err(ActionError::Battle(BattleError::ZeroDefenseStat))
         );
         assert_eq!(battle.state(), &initial);
         assert_eq!(battle, before); // Failed damage rolls must not advance the random stream.
 
-        battle
-            .play_turn_with_rosters(&player, &opponent, retry.0, retry.1)
-            .unwrap();
+        battle.play_turn_with_rosters(retry.0, retry.1).unwrap();
 
         assert_eq!(battle.state(), &initial);
     }
