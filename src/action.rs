@@ -19,6 +19,7 @@ pub enum ActionError {
     BattleTerminated,
     /// The environment reached its turn limit; reset before taking another action.
     EpisodeTruncated,
+    MissingRosters,
     InvalidState(StateError),
     Battle(BattleError),
 }
