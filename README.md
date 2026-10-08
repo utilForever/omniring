@@ -83,6 +83,30 @@ For direct battles, bind rosters once with `Battle::with_rosters(state, player, 
 
 `Battle::new(state)` and `Battle::with_seed(state, seed)` remain available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state or random stream. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
 
+### Views for either Trainer
+
+Use the existing `BattleSide` selector with `Environment::observation(side)` and `Environment::legal_actions(side)`. In each observation, `player` is the requested Trainer and `opponent` is the other Trainer. The Trainer sees its own full selection; only opposing slots that have entered battle are revealed as selected. A switch-in stays revealed even if it immediately faints, and reset clears both sides' reveal history.
+
+```rust
+use omniring::{Action, BattleSide, Environment};
+
+let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46)?;
+env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([5, 4, 3]))?;
+
+let player_view = env.observation(BattleSide::Player)?;
+let opponent_view = env.observation(BattleSide::Opponent)?;
+let player_action = env.legal_actions(BattleSide::Player)[0];
+let opponent_action = env.legal_actions(BattleSide::Opponent)[0];
+let outcome = env.step(player_action, opponent_action)?;
+let player_reward = outcome.reward_for(BattleSide::Player);
+let opponent_reward = outcome.reward_for(BattleSide::Opponent);
+assert_eq!(opponent_reward, -player_reward);
+```
+
+Queries borrow the same canonical battle state and return independent observation snapshots without advancing the RNG. Battle actions remain ordered by move slot, then roster slot. A fainted side gets only valid replacement switches; terminated or truncated episodes return no legal actions. Direct state users can also call `BattleState::legal_actions(side)` and `validate_action(side, action)`; the existing player-only methods remain available.
+
+During preview, observations swap the two public rosters and legal actions list ordered selections for the requested roster, excluding fainted leads (120 choices when all six Pokemon are alive). Submit both Trainers' `SelectTeam` actions through `step`; the opponent's explicit selection overrides the constructor's default for that episode. Invalid selections leave the environment in preview. For compatibility, an opponent `Move` or `Switch` input during preview still uses the constructor's default. Both reset methods retain that default, so policies can choose again each episode. `step` arguments and event side labels always use the original player/opponent identities; `StepOutcome.observation` and `.reward` retain the original player's perspective. Query the environment after each step for the other observation, and use `reward_for` for either reward. Events remain a replay/debug trace that can include unexecuted opposing choices, so they are not a policy observation.
+
 ### Bounded episodes
 
 Each environment has a fixed safety limit of `omniring::MAX_EPISODE_TURNS` (1,000 turns). Successful attack turns and voluntary switches count, including turns where both sides only switch. Team selection, forced replacement steps, and failed steps do not count. Both `reset()` and `reset_with_seed(seed)` restore the full turn budget.
@@ -141,7 +165,7 @@ The core resolver now checks `Move.accuracy` using the battle-owned RNG before d
 
 ### Replay a completed episode
 
-`BattleReplay` stores the initial player and opponent rosters (including HP), opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. The opponent action during team preview is ignored, as in a live episode.
+`BattleReplay` stores the initial player and opponent rosters (including HP), default opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. An explicit opponent `SelectTeam` during preview overrides the default; a `Move` or `Switch` input keeps it, as in a live episode. Previously ignored opponent `SelectTeam` inputs now take effect and must be valid.
 
 ```rust
 use omniring::BattleReplay;
