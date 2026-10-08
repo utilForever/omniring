@@ -33,7 +33,7 @@ pub enum ReplayError {
 impl BattleReplay {
     /// Replays every action through `Environment::step`, returning its outcomes in order.
     /// The final outcome contains the terminal observation. The step trace uses the
-    /// existing observations, rewards, and termination flags; no separate event log is stored.
+    /// existing observations, rewards, events, and termination flags; no separate log is stored.
     /// Returns the first setup/action error, or `Incomplete` if more actions are needed.
     pub fn run(&self) -> Result<Vec<StepOutcome>, ReplayError> {
         let mut environment = Environment::from_rosters_with_seed(
