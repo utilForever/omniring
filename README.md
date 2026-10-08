@@ -59,7 +59,7 @@ cargo run --example battle_demo
 
 The scripted demo creates a level-50 Charizard and Venusaur with four moves each, then copies each Pokemon into a six-Pokemon roster. Both Trainers select slots `[0, 1, 2]` and field one Pokemon at a time. Each side uses its first move and automatically replaces fainted Pokemon until one selected team is defeated.
 
-The output shows the seed, HP, actions (zero-based slots), step rewards, and the winner with the total reward. The demo uses seed `46` to reproduce its damage rolls. Forced replacements are separate steps and do not consume an attack turn. The demo fails if it cannot finish within 100 steps.
+The output shows the seed, HP, actions (zero-based slots), step rewards, and the winner with the total reward. The demo uses seed `46` to reproduce its damage rolls. Forced replacements are separate steps and do not consume an attack turn. If the environment's turn limit is reached, the demo reports truncation without a winner.
 
 Its end-to-end self-check runs with `cargo test --all`, or on its own:
 
@@ -82,6 +82,20 @@ These focused checks use the real battle logic to cover reset, team selection, d
 For direct battles, bind rosters once with `Battle::with_rosters(state, player, opponent)`, then call `play_turn_with_rosters(player_action, opponent_action)`. The battle owns immutable rosters; cloning a battle shares that data while copying its runtime state and random stream. Callers migrating from the previous API should move the roster arguments from each turn call to the constructor.
 
 `Battle::new(state)` and `Battle::with_seed(state, seed)` remain available for custom `play_turn` resolvers. Calling `play_turn_with_rosters` without bound rosters returns `ActionError::MissingRosters` without changing the state or random stream. `Environment::from_rosters` continues to retain its rosters in the transition closure and requires no API changes.
+
+### Bounded episodes
+
+Each environment has a fixed safety limit of `omniring::MAX_EPISODE_TURNS` (1,000 turns). Successful attack turns and voluntary switches count, including turns where both sides only switch. Team selection, forced replacement steps, and failed steps do not count. Both `reset()` and `reset_with_seed(seed)` restore the full turn budget.
+
+Stop a rollout when `outcome.terminated || outcome.truncated`. On turn 1,000, a real terminal battle result takes precedence: `terminated` is true and `truncated` is false. Otherwise, `truncated` is true and `terminated` stays false, including in the battle observation. Truncation adds no win/loss reward or `BattleCompleted` event; the last turn's ordinary HP/faint rewards and events are preserved. Further steps return `ActionError::EpisodeTruncated` until reset. Actual terminal battles still return `ActionError::BattleTerminated`.
+
+This is an environment safety limit, not a draw, forfeit, or tournament timer. Direct `Battle` use is unchanged. Callers constructing `StepOutcome` must supply the new `truncated` field, and exhaustive `ActionError` matches must handle the new variant.
+
+Run the switch-only truncation and reset check:
+
+```bash
+cargo test --test environment_battle switch_only_episode_stops_at_the_turn_limit
+```
 
 ### Reproducible battles
 
@@ -125,7 +139,7 @@ The core resolver now checks `Move.accuracy` using the battle-owned RNG before d
 
 **Custom transition API change:** callbacks now return `Result<Vec<BattleEvent>, ActionError>` instead of `Result<(), ActionError>`. Replace `Ok(())` with `Ok(Vec::new())` when no attack outcomes are needed, or return them in their actual order. The battle adds move selections, action-driven switches, and completion; callbacks must report their own damage, faint, and miss events. Callback events are trusted and are not inferred or validated against HP changes.
 
-### Replay a completed battle
+### Replay a completed episode
 
 `BattleReplay` stores the initial player and opponent rosters (including HP), opponent selection, seed, and ordered `(player_action, opponent_action)` pairs. Record each successful `Environment::step` call, starting with the player's `Action::SelectTeam` and including voluntary switches and forced replacements. The opponent action during team preview is ignored, as in a live episode.
 
@@ -137,16 +151,17 @@ let replay = BattleReplay {
     opponent,
     opponent_selection: [0, 1, 2],
     seed: 46,
-    actions, // Recorded pairs from team selection through the terminal step.
+    actions, // Recorded pairs from team selection through termination or truncation.
 };
 let outcomes = replay.run()?;
-assert!(outcomes.last().unwrap().terminated);
+let last = outcomes.last().unwrap();
+assert!(last.terminated || last.truncated);
 assert_eq!(replay.run()?, outcomes);
 ```
 
-`run()` creates a fresh seeded environment and uses the normal `step` path. It returns every `StepOutcome` in order, preserving observations, rewards, structured events, and termination flags; the last observation is the terminal state visible to the player. These step outcomes are the replay's event trace. The input stores no intermediate states, and there is no separate event engine or stable on-disk format. The same library-version and target-platform limits as seeded battles apply.
+`run()` creates a fresh seeded environment and uses the normal `step` path. It returns every `StepOutcome` in order, preserving observations, rewards, structured events, and termination/truncation flags; the last observation is the state visible to the player when the episode ends. These step outcomes are the replay's event trace. The input stores no intermediate states, and there is no separate event engine or stable on-disk format. The same library-version and target-platform limits as seeded battles apply.
 
-Errors distinguish invalid setup (`ReplayError::InvalidSetup`), a failed action with its zero-based step index and original `ActionError` (`ReplayError::InvalidAction`), and an empty or unfinished sequence (`ReplayError::Incomplete`). Extra actions after termination fail with `ActionError::BattleTerminated`.
+Errors distinguish invalid setup (`ReplayError::InvalidSetup`), a failed action with its zero-based step index and original `ActionError` (`ReplayError::InvalidAction`), and an empty or unfinished sequence (`ReplayError::Incomplete`). Extra actions after termination fail with `ActionError::BattleTerminated`; extra actions after truncation fail with `ActionError::EpisodeTruncated`.
 
 Run the check that records a seeded battle, replays it twice, and checks invalid inputs:
 
