@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use crate::damage::calculate_damage_with_rng;
 pub use crate::damage::{DamageModifier, DamageResult, Fraction, calculate_damage};
 use crate::info::{BattleError, Move, MoveCategory, Pokemon};
 use crate::{Action, ActionError, BattleState, StateError, TeamState};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
+
+type Rosters = ([Pokemon; 6], [Pokemon; 6]);
 
 /// Identifies a Trainer independently of Pokemon names or roster slots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,17 +72,21 @@ pub enum BattleEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Battle {
     state: BattleState,
+    rosters: Option<Arc<Rosters>>,
     pub(crate) rng: SmallRng,
     events: Vec<BattleEvent>,
 }
 
 impl Battle {
-    /// Creates a battle with a randomly chosen seed.
+    /// Creates a battle for custom `play_turn` resolvers, without bound rosters.
+    /// Chooses a random seed once at construction.
     pub fn new(state: BattleState) -> Self {
         Self::with_seed(state, rand::random())
     }
 
-    /// Creates a reproducible battle. Cloning a battle also copies its random stream.
+    /// Creates a reproducible battle for custom `play_turn` resolvers, without bound rosters.
+    /// For the built-in resolver, use `Battle::with_rosters_and_seed` instead.
+    /// Cloning a battle also copies its random stream.
     /// Replays require the same initial state, actions, rosters, library versions, and target platform.
     pub fn with_seed(state: BattleState, seed: u64) -> Self {
         Self::with_rng(state, SmallRng::seed_from_u64(seed))
@@ -87,8 +95,40 @@ impl Battle {
     pub(crate) fn with_rng(state: BattleState, rng: SmallRng) -> Self {
         Self {
             state,
+            rosters: None,
             rng,
             events: Vec::new(),
+        }
+    }
+
+    /// Binds immutable calculation data for the lifetime of a direct battle.
+    /// Cloned battles share these rosters and copy their runtime state and random stream.
+    /// Live HP and move availability come from `state`, not from the rosters.
+    ///
+    /// ```
+    /// use omniring::{Action, ActionError, Battle, BattleState};
+    /// use omniring::info::Pokemon;
+    /// # fn turn(state: BattleState, player: [Pokemon; 6], opponent: [Pokemon; 6]) -> Result<(), ActionError> {
+    /// let mut battle = Battle::with_rosters(state, player, opponent);
+    /// battle.play_turn_with_rosters(Action::Move(0), Action::Move(0))?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_rosters(state: BattleState, player: [Pokemon; 6], opponent: [Pokemon; 6]) -> Self {
+        Self::with_rosters_and_seed(state, player, opponent, rand::random())
+    }
+
+    /// Binds immutable rosters and seeds the random stream for a reproducible direct battle.
+    /// Replays require the same initial state, actions, rosters, library versions, and target platform.
+    pub fn with_rosters_and_seed(
+        state: BattleState,
+        player: [Pokemon; 6],
+        opponent: [Pokemon; 6],
+        seed: u64,
+    ) -> Self {
+        Self {
+            rosters: Some(Arc::new((player, opponent))),
+            ..Self::with_seed(state, seed)
         }
     }
 
@@ -102,22 +142,23 @@ impl Battle {
         &self.events
     }
 
-    /// Resolves a turn using immutable calculation data for the corresponding roster slots.
+    /// Resolves a turn using the immutable rosters bound at construction.
     /// HP, selection, active slots, and move availability come from this battle's state.
+    /// Returns `ActionError::MissingRosters` for a battle created with `Battle::new` or `Battle::with_seed`.
     /// A failed turn leaves the state and random stream unchanged. An available move missing from the
-    /// supplied roster returns `ActionError::Battle(BattleError::InvalidMoveIndex)`.
+    /// bound roster returns `ActionError::Battle(BattleError::InvalidMoveIndex)`.
     pub fn play_turn_with_rosters(
         &mut self,
-        player: &[Pokemon; 6],
-        opponent: &[Pokemon; 6],
         player_action: Action,
         opponent_action: Action,
     ) -> Result<&BattleState, ActionError> {
+        let rosters = self.rosters.clone().ok_or(ActionError::MissingRosters)?;
+
         self.play_turn(
             player_action,
             opponent_action,
             |state, action, opponent_action, rng| {
-                Self::resolve_turn(state, player, opponent, action, opponent_action, rng)
+                Self::resolve_turn(state, &rosters.0, &rosters.1, action, opponent_action, rng)
             },
         )
     }
@@ -550,6 +591,19 @@ mod state_tests {
     use crate::{Action, ActionError, BattleState, PokemonState, TeamState};
 
     #[test]
+    fn roster_turn_without_bound_rosters_leaves_state_and_rng_unchanged() {
+        for mut battle in [Battle::new(state()), Battle::with_seed(state(), 46)] {
+            let before = battle.clone();
+
+            assert_eq!(
+                battle.play_turn_with_rosters(Action::Move(0), Action::Move(0)),
+                Err(ActionError::MissingRosters)
+            );
+            assert_eq!(battle, before);
+        }
+    }
+
+    #[test]
     fn failed_resolution_discards_all_runtime_mutations() {
         let initial = state();
         let mut battle = Battle::new(initial.clone());
@@ -874,14 +928,14 @@ mod resolution_tests {
             )
             .unwrap();
 
-            let mut battle = Battle::with_seed(initial.clone(), seed);
+            let mut battle = Battle::with_rosters_and_seed(
+                initial.clone(),
+                std::array::from_fn(|_| player.clone()),
+                std::array::from_fn(|_| opponent.clone()),
+                seed,
+            );
             battle
-                .play_turn_with_rosters(
-                    &std::array::from_fn(|_| player.clone()),
-                    &std::array::from_fn(|_| opponent.clone()),
-                    Action::Move(2),
-                    Action::Move(0),
-                )
+                .play_turn_with_rosters(Action::Move(2), Action::Move(0))
                 .unwrap();
 
             assert_eq!(battle.state(), &expected);
