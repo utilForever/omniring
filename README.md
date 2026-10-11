@@ -34,7 +34,7 @@
 
 ### Prerequisites
 
-- Rust stable toolchain with edition 2024 support
+- Rust 1.88 or newer (edition 2024)
 - Git
 
 ### 1. Clone
