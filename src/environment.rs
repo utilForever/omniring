@@ -1,7 +1,8 @@
 use crate::info::{Pokemon, validate_move_count};
 use crate::{
-    Action, ActionError, Battle, BattleEvent, BattleObservation, BattleSide, BattleState,
-    OpponentObservation, PokemonState, TeamPreviewObservation, TeamState, calculate_reward,
+    ACTION_SPACE_SIZE, Action, ActionError, Battle, BattleEvent, BattleObservation, BattleSide,
+    BattleState, OpponentObservation, PokemonState, TeamPreviewObservation, TeamState,
+    calculate_reward,
 };
 use rand::{SeedableRng, rngs::SmallRng};
 
@@ -20,7 +21,6 @@ pub enum Observation {
 /// A minimal episode loop around a battle-state transition function.
 pub struct Environment<F> {
     preview: TeamPreviewObservation,
-    opponent: TeamState,
     battle: Option<Battle>,
     // Used during preview; the active battle owns and advances the stream after selection.
     rng: SmallRng,
@@ -58,6 +58,8 @@ impl Environment<()> {
     /// Creates an environment using the core battle logic and one to four moves per Pokemon.
     /// Roster slots are preserved; the first selected slot is each side's lead.
     /// `reset` restores the supplied HP and returns to team preview, continuing the random stream.
+    /// The legacy `opponent_selection` argument is validated at construction only;
+    /// both Trainers must submit `SelectTeam` actions during preview.
     ///
     /// ```
     /// use omniring::{Action, ActionError, BattleSide, Environment};
@@ -102,6 +104,7 @@ impl Environment<()> {
 
     /// Creates an environment with a reproducible battle random stream.
     /// Use `reset_with_seed` to replay an episode; ordinary `reset` continues the stream.
+    /// `opponent_selection` is validated only, as in `from_rosters`; preview requires both choices.
     #[expect(
         clippy::type_complexity,
         reason = "Reuse the generic environment without boxing its resolver"
@@ -163,6 +166,7 @@ where
 {
     /// Creates an environment with a randomly chosen seed and a custom transition.
     /// The transition receives the battle's RNG as its fourth argument.
+    /// `opponent_selection` is validated only; preview requires both Trainers' `SelectTeam` actions.
     pub fn new(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
@@ -176,6 +180,8 @@ where
     /// Return attack events in resolution order, or `Ok(Vec::new())` for none.
     /// The battle adds move selections, action-driven switches, and completion; custom HP changes must
     /// include their own damage/faint events. Events are trusted, not inferred from HP.
+    /// The legacy `opponent_selection` argument is validated at construction only;
+    /// it is not a fallback for missing preview selections.
     pub fn new_with_seed(
         preview: TeamPreviewObservation,
         opponent_selection: [usize; 3],
@@ -183,12 +189,10 @@ where
         transition: F,
     ) -> Result<Self, ActionError> {
         preview.validate_player_action(Action::SelectTeam(opponent_selection))?;
-
-        let opponent = selected_team(preview.opponent.clone(), opponent_selection)?;
+        selected_team(preview.opponent.clone(), opponent_selection)?;
 
         Ok(Self {
             preview,
-            opponent,
             battle: None,
             rng: SmallRng::seed_from_u64(seed),
             player_revealed: [false; 6],
@@ -248,45 +252,87 @@ where
     /// Either Trainer can submit a preview selection through `step`.
     /// Terminated or truncated episodes have no legal actions.
     pub fn legal_actions(&self, side: BattleSide) -> Vec<Action> {
+        self.legal_action_mask(side)
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, legal)| legal)
+            .map(|(index, _)| Action::from_index(index).unwrap())
+            .collect()
+    }
+
+    /// Returns one flag per stable action index, using `validate_action` for legality.
+    /// The same length and mapping apply in preview, battle, and forced replacement.
+    /// Terminated or truncated episodes return an all-false mask.
+    pub fn legal_action_mask(&self, side: BattleSide) -> [bool; ACTION_SPACE_SIZE] {
+        std::array::from_fn(|index| {
+            self.validate_action(side, Action::from_index(index).unwrap())
+                .is_ok()
+        })
+    }
+
+    /// Validates a Trainer's action without advancing state or the random stream.
+    /// Preview requires `SelectTeam`, including for the opponent, and a living lead.
+    /// Both `step` and `step_indexed` use these rules.
+    pub fn validate_action(&self, side: BattleSide, action: Action) -> Result<(), ActionError> {
         match &self.battle {
             None => {
+                self.preview.validate_player_action(action)?;
+
+                let Action::SelectTeam(selection) = action else {
+                    return Err(ActionError::WrongPhase);
+                };
                 let roster = match side {
                     BattleSide::Player => &self.preview.player,
                     BattleSide::Opponent => &self.preview.opponent,
                 };
 
-                self.preview.legal_player_actions().into_iter().filter(|action| {
-                    matches!(action, Action::SelectTeam([lead, _, _]) if roster[*lead].hp_curr() > 0)
-                }).collect()
+                selected_team(roster.clone(), selection).map(|_| ())
             }
-            Some(_) if self.elapsed_turns >= MAX_EPISODE_TURNS => Vec::new(),
-            Some(battle) => battle.state().legal_actions(side),
+            Some(battle)
+                if self.elapsed_turns >= MAX_EPISODE_TURNS && !battle.state().terminated =>
+            {
+                Err(ActionError::EpisodeTruncated)
+            }
+            Some(battle) => battle.state().validate_action(side, action),
         }
     }
 
+    /// Decodes both stable indices and delegates validation and execution to `step`.
+    /// Mask-disabled actions are rejected for either Trainer, including during preview;
+    /// both preview indices must select teams. Invalid indices or actions change no state.
+    pub fn step_indexed(
+        &mut self,
+        action_index: usize,
+        opponent_action_index: usize,
+    ) -> Result<StepOutcome, ActionError> {
+        let action = Action::from_index(action_index).ok_or(ActionError::InvalidActionIndex)?;
+        let opponent_action =
+            Action::from_index(opponent_action_index).ok_or(ActionError::InvalidActionIndex)?;
+
+        self.step(action, opponent_action)
+    }
+
     /// Advances an episode, capped at `MAX_EPISODE_TURNS` successful battle turns.
-    /// During preview, an opponent `SelectTeam` overrides the constructor's default
-    /// for this episode. For compatibility, opponent `Move`/`Switch` inputs keep that default.
-    /// Both selections are validated before the battle or reveal history changes.
+    /// Both Trainers must select teams during preview, including after reset.
+    /// Both actions are validated before the battle or reveal history changes.
     /// After truncation, returns `ActionError::EpisodeTruncated` until reset.
     pub fn step(
         &mut self,
         action: Action,
         opponent_action: Action,
     ) -> Result<StepOutcome, ActionError> {
+        self.validate_action(BattleSide::Player, action)?;
+        self.validate_action(BattleSide::Opponent, opponent_action)?;
+
         if self.battle.is_none() {
-            let Action::SelectTeam(selection) = action else {
+            let (Action::SelectTeam(selection), Action::SelectTeam(opponent_selection)) =
+                (action, opponent_action)
+            else {
                 return Err(ActionError::WrongPhase);
             };
-            self.preview.validate_player_action(action)?;
 
             let player = selected_team(self.preview.player.clone(), selection)?;
-            let opponent = if let Action::SelectTeam(selection) = opponent_action {
-                self.preview.validate_player_action(opponent_action)?;
-                selected_team(self.preview.opponent.clone(), selection)?
-            } else {
-                self.opponent.clone()
-            };
+            let opponent = selected_team(self.preview.opponent.clone(), opponent_selection)?;
 
             self.player_revealed[player.slot_active().unwrap()] = true;
             self.opponent_revealed[opponent.slot_active().unwrap()] = true;
@@ -315,11 +361,6 @@ where
         }
 
         let previous = self.battle.as_ref().unwrap().clone();
-
-        if self.elapsed_turns >= MAX_EPISODE_TURNS && !previous.state().terminated {
-            return Err(ActionError::EpisodeTruncated);
-        }
-
         let elapsed_turns = self.elapsed_turns
             + usize::from(
                 previous.state().player.slot_active().is_some()
@@ -421,9 +462,244 @@ mod tests {
 
     use super::{Environment, MAX_EPISODE_TURNS, Observation};
     use crate::{
-        Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
+        ACTION_SPACE_SIZE, Action, ActionError, BattleEvent, BattleSide, BattleState, PokemonState,
         TeamPreviewObservation, TeamState,
     };
+
+    #[test]
+    fn action_masks_match_validation_and_both_step_apis_in_every_phase() {
+        let mut preview = TeamPreviewObservation {
+            player: std::array::from_fn(|_| {
+                PokemonState::new(100, 100, [true, false, true, false]).unwrap()
+            }),
+            opponent: std::array::from_fn(|_| {
+                PokemonState::new(100, 100, [false, true, false, false]).unwrap()
+            }),
+        };
+        preview.player[4] = PokemonState::new(0, 100, [true; 4]).unwrap();
+        preview.opponent[0] = PokemonState::new(0, 100, [true; 4]).unwrap();
+
+        let mut environment =
+            Environment::new_with_seed(preview, [5, 2, 3], 52, |state, action, _, rng| {
+                let _ = rng.random::<u64>();
+
+                state.opponent.damage_active(u32::MAX).unwrap();
+
+                if action == Action::Move(2) {
+                    state.player.damage_active(u32::MAX).unwrap();
+                }
+
+                Ok(Vec::new())
+            })
+            .unwrap();
+        let sides = [BattleSide::Player, BattleSide::Opponent];
+
+        // Restore successful candidates to exercise every index against the same state.
+        // The transition above has no captured side effects to restore.
+        let check_masks = |env: &mut Environment<_>| {
+            let snapshot = (
+                env.battle.clone(),
+                env.rng.clone(),
+                env.player_revealed,
+                env.opponent_revealed,
+                env.elapsed_turns,
+            );
+            let masks: [[bool; ACTION_SPACE_SIZE]; 2] =
+                sides.map(|side| env.legal_action_mask(side));
+
+            for (side_index, side) in sides.into_iter().enumerate() {
+                let mut enabled = Vec::new();
+                let other = masks[1 - side_index]
+                    .iter()
+                    .position(|&legal| legal)
+                    .unwrap_or(120);
+
+                for (index, legal) in masks[side_index].into_iter().enumerate() {
+                    let action = Action::from_index(index).unwrap();
+
+                    assert_eq!(env.validate_action(side, action).is_ok(), legal);
+
+                    let (player, opponent) = if side_index == 0 {
+                        (index, other)
+                    } else {
+                        (other, index)
+                    };
+                    let [typed, indexed] = [false, true].map(|indexed| {
+                        let result = if indexed {
+                            env.step_indexed(player, opponent)
+                        } else {
+                            env.step(
+                                Action::from_index(player).unwrap(),
+                                Action::from_index(opponent).unwrap(),
+                            )
+                        };
+
+                        assert_eq!(
+                            result.is_ok(),
+                            legal,
+                            "{side:?}: {action:?}, indexed={indexed}"
+                        );
+
+                        if !legal {
+                            assert_eq!(
+                                (
+                                    &env.battle,
+                                    &env.rng,
+                                    env.player_revealed,
+                                    env.opponent_revealed,
+                                    env.elapsed_turns
+                                ),
+                                (&snapshot.0, &snapshot.1, snapshot.2, snapshot.3, snapshot.4),
+                            );
+                        }
+                        (
+                            env.battle,
+                            env.rng,
+                            env.player_revealed,
+                            env.opponent_revealed,
+                            env.elapsed_turns,
+                        ) = snapshot.clone();
+                        result
+                    });
+
+                    assert_eq!(typed, indexed);
+
+                    if legal {
+                        enabled.push(action);
+                    }
+                }
+
+                assert_eq!(env.legal_actions(side), enabled);
+            }
+
+            for index in [ACTION_SPACE_SIZE, usize::MAX] {
+                for (player, opponent) in [(index, 0), (0, index)] {
+                    assert_eq!(
+                        env.step_indexed(player, opponent),
+                        Err(ActionError::InvalidActionIndex)
+                    );
+                }
+            }
+
+            assert_eq!(
+                (
+                    env.battle.clone(),
+                    env.rng.clone(),
+                    env.player_revealed,
+                    env.opponent_revealed,
+                    env.elapsed_turns
+                ),
+                snapshot,
+            );
+        };
+
+        let preview_masks = sides.map(|side| environment.legal_action_mask(side));
+
+        for (mask, fainted_lead) in preview_masks.iter().zip([4, 0]) {
+            assert_eq!(mask.iter().filter(|&&legal| legal).count(), 100);
+            assert!(mask[120..].iter().all(|&legal| !legal));
+
+            for (index, &legal) in mask[..120].iter().enumerate() {
+                let Action::SelectTeam([lead, _, _]) = Action::from_index(index).unwrap() else {
+                    unreachable!()
+                };
+
+                assert_eq!(legal, lead != fainted_lead);
+            }
+        }
+
+        check_masks(&mut environment);
+
+        let selection = Action::SelectTeam([1, 3, 4]);
+
+        environment
+            .step_indexed(selection.to_index().unwrap(), 113)
+            .unwrap(); // [5, 3, 1]
+
+        assert_eq!(
+            environment.legal_actions(sides[0]),
+            vec![Action::Move(0), Action::Move(2), Action::Switch(3)]
+        );
+        assert_eq!(
+            environment.legal_actions(sides[1]),
+            vec![Action::Move(1), Action::Switch(1), Action::Switch(3)]
+        );
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(120, 121).unwrap(); // Only the opponent faints.
+
+        assert_eq!(
+            environment.legal_actions(sides[1]),
+            vec![Action::Switch(1), Action::Switch(3)]
+        );
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(120, 125).unwrap();
+        environment.step_indexed(122, 121).unwrap(); // Both sides need replacement.
+
+        for side in sides {
+            assert_eq!(environment.legal_actions(side), vec![Action::Switch(3)]);
+        }
+
+        check_masks(&mut environment);
+
+        environment.step_indexed(127, 127).unwrap();
+
+        assert!(environment.step_indexed(122, 121).unwrap().terminated);
+
+        for side in sides {
+            assert_eq!(
+                environment.legal_action_mask(side),
+                [false; ACTION_SPACE_SIZE]
+            );
+            assert_eq!(
+                environment.validate_action(side, Action::Move(0)),
+                Err(ActionError::BattleTerminated)
+            );
+        }
+
+        check_masks(&mut environment);
+
+        environment.reset();
+
+        assert_eq!(
+            sides.map(|side| environment.legal_action_mask(side)),
+            preview_masks
+        );
+
+        environment
+            .step_indexed(selection.to_index().unwrap(), 113)
+            .unwrap();
+        environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
+
+        check_masks(&mut environment);
+
+        assert!(environment.step_indexed(127, 125).unwrap().truncated);
+
+        for side in sides {
+            assert_eq!(
+                environment.legal_action_mask(side),
+                [false; ACTION_SPACE_SIZE]
+            );
+            assert_eq!(
+                environment.validate_action(side, Action::Move(0)),
+                Err(ActionError::EpisodeTruncated)
+            );
+        }
+
+        check_masks(&mut environment);
+
+        environment.reset_with_seed(52);
+
+        assert_eq!(
+            sides.map(|side| environment.legal_action_mask(side)),
+            preview_masks
+        );
+
+        check_masks(&mut environment);
+    }
 
     #[test]
     fn custom_events_are_forwarded_and_failed_steps_preserve_previous_events() {
@@ -452,7 +728,7 @@ mod tests {
         )
         .unwrap();
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         let first = environment.step(Action::Move(0), Action::Move(0)).unwrap();
@@ -511,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_selections_are_validated_atomically_and_reset_keeps_the_default() {
+    fn preview_selections_are_validated_atomically_after_each_reset() {
         let mut player_roster = roster(100);
         player_roster[4] = PokemonState::new(0, 100, [true; 4]).unwrap();
 
@@ -576,7 +852,12 @@ mod tests {
             assert_eq!(environment.opponent_revealed, [false; 6]);
         }
 
-        for fallback in [Action::Move(0), Action::Switch(0)] {
+        for (reseed, invalid) in [
+            (false, Action::Move(0)),
+            (true, Action::Switch(0)),
+            (false, Action::Move(usize::MAX)),
+            (true, Action::Switch(usize::MAX)),
+        ] {
             environment
                 .step(player, Action::SelectTeam([4, 3, 2]))
                 .unwrap();
@@ -592,13 +873,32 @@ mod tests {
             );
             assert_eq!(view.player.slot_active(), Some(4));
 
-            if matches!(fallback, Action::Move(_)) {
-                environment.reset();
-            } else {
+            if reseed {
                 environment.reset_with_seed(46);
+            } else {
+                environment.reset();
             }
 
-            environment.step(player, fallback).unwrap();
+            assert_eq!(
+                environment.step(player, invalid),
+                Err(ActionError::WrongPhase)
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Player).unwrap(),
+                preview
+            );
+            assert_eq!(
+                environment.observation(BattleSide::Opponent).unwrap(),
+                reverse
+            );
+            assert_eq!(environment.rng, rng);
+            assert_eq!(environment.player_revealed, [false; 6]);
+            assert_eq!(environment.opponent_revealed, [false; 6]);
+            assert_eq!(environment.elapsed_turns, 0);
+
+            environment
+                .step(player, Action::SelectTeam([0, 1, 2]))
+                .unwrap();
 
             let Observation::Battle(view) = environment.observation(BattleSide::Opponent).unwrap()
             else {
@@ -645,7 +945,7 @@ mod tests {
         );
 
         let selected = environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         assert_eq!(selected.reward, 0.0);
@@ -721,7 +1021,7 @@ mod tests {
             .unwrap();
 
         let selected = environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
         let before = environment.battle.clone();
         let reverse_before = environment.observation(BattleSide::Opponent).unwrap();
@@ -795,7 +1095,7 @@ mod tests {
         .unwrap();
 
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
         environment.elapsed_turns = MAX_EPISODE_TURNS - 3;
 
@@ -852,7 +1152,7 @@ mod tests {
             )
             .unwrap();
             environment
-                .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+                .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
                 .unwrap();
             environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
 

@@ -48,7 +48,7 @@ fn either_trainer_can_query_its_view_without_changing_the_seeded_battle() {
         assert_eq!(
             selected,
             control
-                .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
+                .step(Action::SelectTeam([4, 1, 3]), Action::SelectTeam([5, 2, 0]))
                 .unwrap()
         );
         assert_eq!(selected.reward_for(BattleSide::Opponent), 0.0);
@@ -165,7 +165,7 @@ fn switch_only_episode_stops_at_the_turn_limit() {
 
     for episode in 0..3 {
         let selected = environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
         assert!(!selected.terminated && !selected.truncated);
 
@@ -230,7 +230,7 @@ fn truncated_episode_replays_and_rejects_extra_actions() {
         opponent: roster("Venusaur"),
         opponent_selection: [0, 1, 2],
         seed: 46,
-        actions: vec![(Action::SelectTeam([0, 1, 2]), Action::Move(0))],
+        actions: vec![(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))],
     };
     replay.actions.extend((1..MAX_EPISODE_TURNS).map(|turn| {
         let action = Action::Switch(turn % 2);
@@ -277,7 +277,7 @@ fn real_battles_run_to_win_or_loss_and_reset() {
         assert!(matches!(preview, Observation::TeamPreview(_)));
 
         let selected = environment
-            .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
+            .step(Action::SelectTeam([4, 1, 3]), Action::SelectTeam([5, 2, 0]))
             .unwrap();
         assert_eq!(selected.reward, 0.0);
         assert!(!selected.terminated);
@@ -409,7 +409,7 @@ fn real_battles_run_to_win_or_loss_and_reset() {
         assert_eq!(environment.reset(), preview);
 
         let restarted = environment
-            .step(Action::SelectTeam([4, 1, 3]), Action::Move(0))
+            .step(Action::SelectTeam([4, 1, 3]), Action::SelectTeam([5, 2, 0]))
             .unwrap();
         assert_eq!(restarted.reward, 0.0);
         assert!(!restarted.terminated);
@@ -434,7 +434,7 @@ fn a_miss_preserves_target_hp_and_allows_the_counterattack() {
         };
         let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
         let initial = env
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         let turn = env.step(Action::Move(0), Action::Move(0)).unwrap();
@@ -463,7 +463,7 @@ fn a_miss_preserves_target_hp_and_allows_the_counterattack() {
         }
 
         env.reset_with_seed(46);
-        env.step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         assert_eq!(env.step(Action::Move(0), Action::Move(0)).unwrap(), turn);
@@ -481,7 +481,7 @@ fn second_turn_knockout_uses_persisted_hp_and_stops_the_counterattack() {
 
         let mut environment = Environment::from_rosters(player, opponent, [0, 1, 2]).unwrap();
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         // Flamethrower needs two hits with these stats, regardless of the damage roll.
@@ -520,7 +520,7 @@ fn protect_and_switches_use_real_moves_and_preserve_benched_hp() {
     let mut environment =
         Environment::from_rosters(roster("Charizard"), roster("Venusaur"), [0, 1, 2]).unwrap();
     let selected = environment
-        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
         .unwrap();
     let initial = battle_observation(selected.observation);
 
@@ -660,7 +660,7 @@ fn failed_core_turn_leaves_hp_unchanged_for_the_next_step() {
 
     let mut environment = Environment::from_rosters(player, opponent, [0, 1, 2]).unwrap();
     let selected = environment
-        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
         .unwrap();
     assert_eq!(
         environment.step(Action::Move(4), Action::Move(0)),
@@ -707,7 +707,7 @@ fn reveals_an_opponent_that_faints_on_switch_in() {
     let mut environment =
         Environment::from_rosters(roster("Charizard"), opponent, [0, 1, 2]).unwrap();
     environment
-        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
         .unwrap();
 
     let outcome = environment
@@ -786,7 +786,7 @@ fn either_view_reveals_a_switch_in_that_faints_and_lists_only_legal_replacements
         let mut environment =
             Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
         environment
-            .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
             .unwrap();
 
         let outcome = environment.step(actions.0, actions.1).unwrap();
@@ -876,7 +876,10 @@ fn only_equipped_move_slots_are_available_in_preview_and_battle() {
     for (lead, mask) in masks.into_iter().enumerate() {
         assert_eq!(environment.reset(), preview);
         let selected = environment
-            .step(Action::SelectTeam([lead, 4, 5]), Action::Move(0))
+            .step(
+                Action::SelectTeam([lead, 4, 5]),
+                Action::SelectTeam([0, 4, 5]),
+            )
             .unwrap();
         let initial = battle_observation(selected.observation.clone());
         assert_eq!(initial.player.roster()[lead].move_availability, mask);
@@ -995,7 +998,10 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
 
         // Include team selection and voluntary switches before recording a complete battle.
         for actions in [
-            (Action::SelectTeam(player_selection), Action::Move(0)),
+            (
+                Action::SelectTeam(player_selection),
+                Action::SelectTeam(opponent_selection),
+            ),
             (Action::Switch(1), Action::Move(2)),
             (Action::Move(2), Action::Switch(2)),
         ] {
@@ -1061,8 +1067,7 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
         assert_eq!(replay.run().unwrap(), expected);
         assert_eq!(replay.run().unwrap(), expected);
 
-        // Explicit preview choices override the constructor default in replays too.
-        replay.actions[0].1 = Action::SelectTeam(opponent_selection);
+        // Recorded preview choices determine the teams independently of the legacy setup selection.
         replay.opponent_selection = [0, 1, 2];
         assert_eq!(replay.run().unwrap(), expected);
 
@@ -1090,6 +1095,16 @@ fn recorded_battle_replays_seeded_steps_and_rejects_invalid_sequences() {
             (
                 0,
                 (Action::Move(0), Action::Move(0)),
+                ActionError::WrongPhase,
+            ),
+            (
+                0,
+                (Action::SelectTeam(player_selection), Action::Move(0)),
+                ActionError::WrongPhase,
+            ),
+            (
+                0,
+                (Action::SelectTeam(player_selection), Action::Switch(0)),
                 ActionError::WrongPhase,
             ),
             (
@@ -1294,7 +1309,7 @@ fn seeded_environment_replays_damage_switches_and_resets() {
 
         let mut outcomes = vec![
             environment
-                .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+                .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
                 .unwrap(),
         ];
 
@@ -1334,10 +1349,10 @@ fn failed_turn_preserves_randomness_for_the_next_valid_turn() {
     let mut control = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
 
     actual
-        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
         .unwrap();
     control
-        .step(Action::SelectTeam([0, 1, 2]), Action::Move(0))
+        .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
         .unwrap();
 
     assert_eq!(
