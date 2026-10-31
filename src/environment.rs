@@ -1132,6 +1132,60 @@ mod tests {
     }
 
     #[test]
+    fn truncation_keeps_hp_and_faint_progress_without_outcome_rewards() {
+        for (opponent_hp, expected) in [([90; 3], 0.01), ([0, 100, 100], 0.1 + 0.1 / 3.0)] {
+            for damaged_side in [BattleSide::Player, BattleSide::Opponent] {
+                let mut environment = Environment::new(
+                    TeamPreviewObservation {
+                        player: roster(100),
+                        opponent: roster(100),
+                    },
+                    [0, 1, 2],
+                    |state, _, _, _| {
+                        let damaged = match damaged_side {
+                            BattleSide::Player => &mut state.player,
+                            BattleSide::Opponent => &mut state.opponent,
+                        };
+                        *damaged = team(opponent_hp);
+                        Ok(Vec::new())
+                    },
+                )
+                .unwrap();
+                environment
+                    .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
+                    .unwrap();
+                environment.elapsed_turns = MAX_EPISODE_TURNS - 1;
+
+                let outcome = environment.step(Action::Move(0), Action::Move(0)).unwrap();
+
+                assert!(outcome.truncated && !outcome.terminated);
+                assert!((outcome.reward_for(damaged_side) + expected).abs() < 1e-6);
+                assert_eq!(
+                    outcome.reward_for(BattleSide::Player)
+                        + outcome.reward_for(BattleSide::Opponent),
+                    0.0
+                );
+                assert!(
+                    !outcome
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, BattleEvent::BattleCompleted { .. }))
+                );
+
+                let before = environment.battle.clone();
+
+                for _ in 0..2 {
+                    assert_eq!(
+                        environment.step(Action::Move(0), Action::Move(0)),
+                        Err(ActionError::EpisodeTruncated)
+                    );
+                    assert_eq!(environment.battle, before);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn terminal_results_on_the_last_turn_are_not_truncated() {
         for (player_hp, opponent_hp, winner, reward) in [
             ([100; 3], [0; 3], Some(BattleSide::Player), 1.4),
@@ -1161,6 +1215,10 @@ mod tests {
             assert!(!outcome.truncated);
             assert!((outcome.reward - reward).abs() < 1e-6);
             assert!((outcome.reward_for(BattleSide::Opponent) + reward).abs() < 1e-6);
+            assert_eq!(
+                outcome.reward_for(BattleSide::Player) + outcome.reward_for(BattleSide::Opponent),
+                0.0
+            );
 
             for side in [BattleSide::Player, BattleSide::Opponent] {
                 assert!(environment.legal_actions(side).is_empty());
