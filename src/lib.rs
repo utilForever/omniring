@@ -7,7 +7,7 @@ mod replay;
 mod reward;
 mod state;
 
-pub use action::{Action, ActionError};
+pub use action::{ACTION_SPACE_SIZE, Action, ActionError};
 pub use battle::{Battle, BattleEvent, BattleSide};
 pub use encoding::{BATTLE_ENCODING_LEN, TEAM_PREVIEW_ENCODING_LEN};
 pub use environment::{Environment, MAX_EPISODE_TURNS, Observation, StepOutcome};

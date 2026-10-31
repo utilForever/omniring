@@ -32,7 +32,8 @@ fn run_demo() -> Result<BattleObservation, ActionError> {
     let mut environment = Environment::from_rosters_with_seed(player, opponent, SELECTION, SEED)?;
     environment.reset();
 
-    let mut outcome = environment.step(Action::SelectTeam(SELECTION), Action::Move(0))?;
+    let mut outcome =
+        environment.step(Action::SelectTeam(SELECTION), Action::SelectTeam(SELECTION))?;
     let mut total_reward = 0.0;
     let mut step = 0;
 
