@@ -31,10 +31,9 @@ pub fn calculate_reward(previous: &BattleState, current: &BattleState) -> f32 {
     };
     let faint_progress = newly_fainted(&previous.opponent, &current.opponent) as f32
         - newly_fainted(&previous.player, &current.player) as f32;
-    let hp_progress = normalized_hp(&previous.opponent)
-        - normalized_hp(&current.opponent)
-        - normalized_hp(&previous.player)
-        + normalized_hp(&current.player);
+    // Subtract each team's HP loss so swapping Trainers exactly negates the result.
+    let hp_progress = (normalized_hp(&previous.opponent) - normalized_hp(&current.opponent))
+        - (normalized_hp(&previous.player) - normalized_hp(&current.player));
 
     outcome + FAINT_REWARD * faint_progress + HP_PROGRESS_REWARD * hp_progress
 }
@@ -81,6 +80,93 @@ mod tests {
         assert_eq!(calculate_reward(&initial, &draw), 0.0);
         assert_eq!(calculate_reward(&initial, &stopped), 0.0);
         assert_eq!(calculate_reward(&win, &win), 0.0);
+    }
+
+    #[test]
+    fn rewards_are_exactly_zero_sum_when_trainers_are_swapped() {
+        for (previous, current) in [
+            (
+                state([100; 3], [100; 3], false),
+                state([90; 3], [80; 3], false),
+            ),
+            (
+                state([100; 3], [100; 3], false),
+                state([1, 2, 3], [97, 98, 99], false),
+            ),
+            (state([90; 3], [5; 3], false), state([80; 3], [4; 3], false)),
+            (
+                state([0, 80, 30], [40, 10, 0], false),
+                state([0, 70, 10], [0, 5, 0], false),
+            ),
+            (
+                state([0, 80, 30], [40, 10, 0], false),
+                state([0, 70, 10], [0; 3], true),
+            ),
+            (
+                state([0, 80, 30], [40, 10, 0], false),
+                state([0; 3], [0; 3], true),
+            ),
+        ] {
+            let swapped = |state: &BattleState| BattleState {
+                player: state.opponent.clone(),
+                opponent: state.player.clone(),
+                terminated: state.terminated,
+            };
+            let reward = calculate_reward(&previous, &current);
+            let reverse = calculate_reward(&swapped(&previous), &swapped(&current));
+
+            assert!(reward.is_finite() && reverse.is_finite());
+            assert_eq!(reward + reverse, 0.0);
+            assert_eq!(calculate_reward(&current, &current), 0.0);
+            assert_eq!(
+                calculate_reward(&swapped(&current), &swapped(&current)),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn progress_uses_selected_hp_fractions_and_counts_each_faint_once() {
+        let team = |hp: [u32; 6]| {
+            TeamState::new(
+                std::array::from_fn(|slot| {
+                    PokemonState::new(hp[slot], [100, 100, 100, 200, 100, 400][slot], [true; 4])
+                        .unwrap()
+                }),
+                [false, true, false, true, false, true],
+                Some(3),
+            )
+            .unwrap()
+        };
+        let initial = BattleState {
+            player: team([100; 6]),
+            opponent: team([100; 6]),
+            terminated: false,
+        };
+
+        let mut current = initial.clone();
+        // Damage and fainting outside the selected team never earn rewards.
+        current.opponent = team([0, 100, 30, 100, 0, 100]);
+
+        assert_eq!(calculate_reward(&initial, &current), 0.0);
+
+        let previous = current.clone();
+        current.opponent = team([0, 100, 30, 50, 0, 100]);
+
+        assert_close(
+            calculate_reward(&previous, &current),
+            0.1 * (50.0 / 200.0) / 3.0,
+        );
+
+        let previous = current.clone();
+        current.opponent = team([0, 0, 30, 50, 0, 100]);
+
+        assert_close(calculate_reward(&previous, &current), 0.1 + 0.1 / 3.0);
+
+        let previous = current.clone();
+        current.opponent.switch_to(5).unwrap();
+
+        assert_eq!(calculate_reward(&previous, &current), 0.0);
     }
 
     fn state(player_hp: [u32; 3], opponent_hp: [u32; 3], terminated: bool) -> BattleState {
