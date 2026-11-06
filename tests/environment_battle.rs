@@ -479,53 +479,96 @@ fn real_battles_run_to_win_or_loss_and_reset() {
 }
 
 #[test]
-fn a_miss_preserves_target_hp_and_allows_the_counterattack() {
-    for player_misses in [true, false] {
-        let faster = roster("Charizard").map(|mut pokemon| {
-            pokemon.moves[0].accuracy = Some(0);
-            pokemon
-        });
-        let slower = roster("Venusaur");
-        let (player, opponent, side, target) = if player_misses {
-            (faster, slower, BattleSide::Player, BattleSide::Opponent)
-        } else {
-            (slower, faster, BattleSide::Opponent, BattleSide::Player)
-        };
-        let mut env = Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], 46).unwrap();
-        let initial = env
-            .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
-            .unwrap();
+fn seeded_damage_replays_super_effective_hits_and_misses() {
+    for player_attacks in [true, false] {
+        let mut saw_hit_and_miss = [false; 2];
 
-        let turn = env.step(Action::Move(0), Action::Move(0)).unwrap();
-        assert!(turn.events.contains(&BattleEvent::Miss {
-            side,
-            slot: 0,
-            move_slot: 0
-        }));
-        assert!(
-            !turn
-                .events
-                .iter()
-                .any(|event| matches!(event, BattleEvent::Damage { side, .. } if *side == target))
-        );
-        assert!(
-            matches!(turn.events.last(), Some(BattleEvent::Damage { side: damaged, .. }) if *damaged == side)
-        );
+        for seed in 0..16 {
+            let faster = roster("Charizard").map(|mut pokemon| {
+                pokemon.moves[0].accuracy = Some(50);
+                pokemon
+            });
+            let slower = roster("Venusaur");
+            let (player, opponent, side, target) = if player_attacks {
+                (faster, slower, BattleSide::Player, BattleSide::Opponent)
+            } else {
+                (slower, faster, BattleSide::Opponent, BattleSide::Player)
+            };
+            let mut env =
+                Environment::from_rosters_with_seed(player, opponent, [0, 1, 2], seed).unwrap();
+            let initial = env
+                .step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
+                .unwrap();
 
-        let before = battle_observation(initial.observation);
-        let after = battle_observation(turn.observation.clone());
+            let turn = env.step(Action::Move(0), Action::Move(0)).unwrap();
+            let missed = turn.events.contains(&BattleEvent::Miss {
+                side,
+                slot: 0,
+                move_slot: 0,
+            });
 
-        if player_misses {
-            assert_eq!(before.opponent.roster(), after.opponent.roster());
-        } else {
-            assert_eq!(before.player.roster(), after.player.roster());
+            saw_hit_and_miss[usize::from(missed)] = true;
+
+            let before = battle_observation(initial.observation);
+            let after = battle_observation(turn.observation.clone());
+            let (before_target, after_target) = if player_attacks {
+                (before.opponent.roster(), after.opponent.roster())
+            } else {
+                (before.player.roster(), after.player.roster())
+            };
+
+            if missed {
+                assert_eq!(before_target, after_target);
+                assert!(!turn.events.iter().any(
+                    |event| matches!(event, BattleEvent::Damage { side, .. } if *side == target)
+                ));
+            } else {
+                let hp_before = before_target[0].hp_curr();
+                let hp_after = after_target[0].hp_curr();
+                let damage = hp_before - hp_after;
+
+                // Base 44, then 85..=100% variance, one 1.5x STAB, and 2x effectiveness.
+                assert!(matches!(
+                    damage,
+                    110 | 114 | 116 | 120 | 122 | 126 | 128 | 132
+                ));
+                assert_eq!(
+                    turn.events[2],
+                    BattleEvent::Damage {
+                        side: target,
+                        slot: 0,
+                        damage,
+                        hp_before,
+                        hp_after,
+                    }
+                );
+            }
+
+            assert_eq!(turn.events.len(), 4);
+            assert!(
+                matches!(turn.events.last(), Some(BattleEvent::Damage { side: damaged, .. }) if *damaged == side)
+            );
+
+            let player_loss =
+                before.player.roster()[0].hp_curr() - after.player.roster()[0].hp_curr();
+            let opponent_loss =
+                before.opponent.roster()[0].hp_curr() - after.opponent.roster()[0].hp_curr();
+
+            assert_rewards(
+                &turn,
+                0.1 / 3.0
+                    * (opponent_loss as f32 / before.opponent.roster()[0].hp_max() as f32
+                        - player_loss as f32 / before.player.roster()[0].hp_max() as f32),
+            );
+
+            env.reset_with_seed(seed);
+            env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
+                .unwrap();
+
+            assert_eq!(env.step(Action::Move(0), Action::Move(0)).unwrap(), turn);
         }
 
-        env.reset_with_seed(46);
-        env.step(Action::SelectTeam([0, 1, 2]), Action::SelectTeam([0, 1, 2]))
-            .unwrap();
-
-        assert_eq!(env.step(Action::Move(0), Action::Move(0)).unwrap(), turn);
+        assert_eq!(saw_hit_and_miss, [true, true]);
     }
 }
 
