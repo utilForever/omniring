@@ -210,6 +210,19 @@ assert_eq!(env.step(Action::Move(0), Action::Move(0))?, first);
 
 Custom transitions passed to `Battle::play_turn` or `Environment::new` now receive a fourth argument, `&mut SmallRng`: use `|state, action, opponent_action, rng|`, or `_` for the last argument if no randomness is needed. `Environment::new_with_seed(preview, selection, seed, transition)` seeds a custom transition. Use the supplied RNG for random decisions. State captured by a callback is not reset or rolled back by the environment.
 
+### Damage resolution
+
+The built-in resolver uses `attack`/`defense` for physical moves and `special_attack`/`special_defense` for special moves. It applies the battle RNG's 85–100% damage roll, a single 1.5× same-type attack bonus when either attacker type matches the move, and the existing type chart's multipliers for both defender types. Immunities deal zero damage; other damaging moves deal at least one. Runtime HP stops at zero, and damage events and rewards use the actual HP lost.
+
+Accuracy is checked before damage using the same seeded battle RNG. A miss leaves the target's HP unchanged, produces a `Miss` event, and consumes no damage roll. Status moves and zero-power moves deal no damage. Critical hits, abilities, held items, weather, and additional status or move-specific effects are outside this damage model; existing Protect/Detect handling is unchanged.
+
+Run the stat/category and type matchup checks, plus seeded super-effective hits, misses, HP changes, and rewards:
+
+```bash
+cargo test damage::tests
+cargo test --test environment_battle seeded_damage_replays_super_effective_hits_and_misses
+```
+
 ### Structured battle events
 
 Each `StepOutcome.events` contains that step's `Vec<BattleEvent>` in resolution order. Direct battles expose the last successful turn's events through `Battle::events()`. Collect the returned steps or copy those slices to retain an episode history; the battle only retains its latest successful turn.
