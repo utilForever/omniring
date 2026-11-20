@@ -263,12 +263,69 @@ mod tests {
     }
 
     #[test]
+    fn damage_uses_matching_physical_and_special_stats() {
+        let mut attacker = pokemon("Charizard");
+        let mut defender = pokemon("Blastoise");
+
+        attacker.stats.attack = 120;
+        attacker.stats.special_attack = 60;
+        defender.stats.defense = 80;
+        defender.stats.special_defense = 120;
+
+        // Neutral base damage is 54 physical or 19 special, then the seeded roll is 98%.
+        for (category, expected_damage) in
+            [(MoveCategory::Physical, 52), (MoveCategory::Special, 18)]
+        {
+            let selected_move =
+                Move::new("Test Move", PokemonType::Normal, category, 80, Some(100), 0);
+            let result = calculate_damage(&attacker, &defender, &selected_move, Some(1)).unwrap();
+
+            assert_eq!(result.damage, expected_damage, "{category:?}");
+            assert_eq!(result.effectiveness, 1.0);
+        }
+    }
+
+    #[test]
     fn damage_applies_stab_and_type_effectiveness() {
         let attacker = pokemon("Charizard");
         let cases = [
             ("neutral", PokemonType::Dragon, pokemon("Venusaur"), 38, 1.0),
-            ("stab", PokemonType::Flying, pokemon("Gengar"), 70, 1.0),
+            (
+                "primary stab",
+                PokemonType::Fire,
+                pokemon("Gengar"),
+                70,
+                1.0,
+            ),
+            (
+                "secondary stab",
+                PokemonType::Flying,
+                pokemon("Gengar"),
+                70,
+                1.0,
+            ),
+            (
+                "single-type super-effective",
+                PokemonType::Electric,
+                pokemon("Blastoise"),
+                74,
+                2.0,
+            ),
             ("resisted", PokemonType::Fire, pokemon("Dragonite"), 28, 0.5),
+            (
+                "dual-type resisted",
+                PokemonType::Grass,
+                pokemon("Venusaur"),
+                9,
+                0.25,
+            ),
+            (
+                "dual-type cancellation",
+                PokemonType::Ground,
+                pokemon("Venusaur"),
+                38,
+                1.0,
+            ),
             (
                 "super-effective",
                 PokemonType::Fire,
